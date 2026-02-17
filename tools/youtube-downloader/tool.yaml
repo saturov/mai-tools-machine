@@ -1,0 +1,31 @@
+name: youtube-downloader
+version: 0.1.0
+description: "Download a YouTube video as MP4 up to 720p."
+capabilities:
+  - youtube.download
+entrypoint:
+  type: shell
+  command: "./run.sh"
+input_schema:
+  type: object
+  required:
+    - url
+  additionalProperties: false
+  properties:
+    url:
+      type: string
+    cookies_from_browser:
+      type: string
+output_schema:
+  type: object
+  required:
+    - file_path
+  additionalProperties: false
+  properties:
+    file_path:
+      type: string
+dependencies:
+  - ffmpeg
+  - youtube
+idempotency: unsafe
+stability: experimental

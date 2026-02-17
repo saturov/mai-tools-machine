@@ -1,0 +1,72 @@
+name: drive-uploader
+version: 0.1.0
+description: "Upload a local file to a Google Drive folder via Drive API v3."
+capabilities:
+  - drive.upload
+entrypoint:
+  type: shell
+  command: "./run.sh"
+input_schema:
+  type: object
+  required:
+    - file_path
+    - folder_id
+  additionalProperties: false
+  properties:
+    file_path:
+      type: string
+    folder_id:
+      type: string
+    name:
+      type: string
+    mime_type:
+      type: string
+    auth_mode:
+      type: string
+      enum: ["oauth", "adc", "service_account"]
+      default: "oauth"
+    credentials_path:
+      type: string
+      description: "For auth_mode=oauth: OAuth client secret JSON. For auth_mode=service_account: service account key JSON."
+    token_path:
+      type: string
+      description: "Path to store OAuth user token JSON (auth_mode=oauth)."
+    resumable:
+      type: boolean
+      default: true
+    timeout_seconds:
+      type: integer
+      minimum: 1
+      default: 120
+    retries:
+      type: integer
+      minimum: 0
+      default: 3
+output_schema:
+  type: object
+  required:
+    - file_id
+    - file_name
+  additionalProperties: false
+  properties:
+    file_id:
+      type: string
+    file_name:
+      type: string
+    web_view_link:
+      type: string
+    mime_type:
+      type: string
+    size_bytes:
+      type: string
+    md5_checksum:
+      type: string
+    parents:
+      type: array
+      items:
+        type: string
+dependencies:
+  - google-drive
+idempotency: unsafe
+stability: experimental
+

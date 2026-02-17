@@ -144,7 +144,7 @@ my-tools-sandbox/
 
 ## 8) Дорожная карта внедрения
 
-1. Ввести `tool.yaml` для существующих утилит (`yb-downloader`, `tg-scraper`) по общей схеме.
+1. Ввести `tool.yaml` для существующих утилит (`youtube-downloader`, `tg-scraper`) по общей схеме.
 2. Реализовать реестр и проверку схемы.
 3. Реализовать `request-router` и `gap-detector`.
 4. Добавить `workflow-executor` с логами и retry.
