@@ -145,7 +145,10 @@ my-tools-sandbox/
 ## 8) Дорожная карта внедрения
 
 1. Ввести `tool.yaml` для существующих утилит (`youtube-downloader`, `tg-scraper`) по общей схеме.
-2. Реализовать реестр и проверку схемы.
+2. Реализовать реестр и проверку схемы. ✅
+   - `make validate-manifests` — проверить `tools/*/tool.yaml` по `schemas/tool-manifest.schema.json`
+   - `make registry` — собрать кэш реестра в `state/registry-cache.json`
+   - `make resolve CAP=domain.action` — выбрать лучшую утилиту для capability из кэша
 3. Реализовать `request-router` и `gap-detector`.
 4. Добавить `workflow-executor` с логами и retry.
 5. Добавить `tool-scaffolder` для быстрого создания недостающих утилит.

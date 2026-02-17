@@ -27,9 +27,12 @@ build/
 .venv/
 venv/
 
+# Registry cache / run state
+state/
+
+
 # Editors / IDEs
 .vscode/
 .idea/
 *.swp
 *.swo
-
