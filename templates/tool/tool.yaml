@@ -1,0 +1,21 @@
+name: example-tool
+version: 0.1.0
+description: "Template utility. Replace with real description."
+capabilities:
+  - domain.action
+entrypoint:
+  type: shell
+  command: "./run.sh"
+input_schema:
+  type: object
+  required: []
+  additionalProperties: true
+  properties: {}
+output_schema:
+  type: object
+  required: []
+  additionalProperties: true
+  properties: {}
+dependencies: []
+idempotency: unknown
+stability: experimental

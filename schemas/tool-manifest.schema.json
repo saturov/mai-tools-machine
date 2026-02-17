@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/tool-manifest.schema.json",
+  "title": "Tool Manifest",
+  "type": "object",
+  "required": [
+    "name",
+    "version",
+    "description",
+    "capabilities",
+    "entrypoint",
+    "input_schema",
+    "output_schema"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 10
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9-]+\\.[a-z0-9-]+$"
+      }
+    },
+    "entrypoint": {
+      "type": "object",
+      "required": [
+        "type",
+        "command"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "shell",
+            "python",
+            "node"
+          ]
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "input_schema": {
+      "type": "object"
+    },
+    "output_schema": {
+      "type": "object"
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "idempotency": {
+      "type": "string",
+      "enum": [
+        "safe",
+        "unsafe",
+        "unknown"
+      ],
+      "default": "unknown"
+    },
+    "stability": {
+      "type": "string",
+      "enum": [
+        "experimental",
+        "stable"
+      ],
+      "default": "experimental"
+    }
+  }
+}
