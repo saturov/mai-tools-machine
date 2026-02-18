@@ -61,15 +61,26 @@ my-tools-sandbox/
 - `tool` (или `null`, если отсутствует)
 - `inputs` (мэппинг из параметров запроса и выходов предыдущих шагов)
 - `on_failure` (retry/skip/fail)
+- `capability_contract` (`input_schema` + `output_schema`)
+- `coverage_confidence` (`0..1`, для LLM-шагов)
+- `coverage_rationale` (краткое обоснование выбора capability)
 
-Если для шага нет подходящей утилиты, `tool=null` и добавляется запись в `gap-report`.
+Шаг считается покрытым только если:
+
+1. В реестре есть кандидат по `capability`.
+2. `capability_contract` шага совместим с `input_schema/output_schema` утилиты.
+3. Для LLM-шага `coverage_confidence >= порога` (fail-closed).
+
+Иначе `tool=null` и добавляется запись в `gap-report`.
 
 ### 3.3 Контракт отчета о пробелах (gap-report)
 
 Отчет формируется всегда, если что-то не покрыто:
 
 - `missing_capability`
-- `reason`
+- `reason` (`no_capability_match|schema_incompatible|low_confidence|invalid_capability`)
+- `reason_message`
+- `reason_details`
 - `proposed_tool_name`
 - `proposed_input_schema`
 - `proposed_output_schema`
@@ -82,6 +93,7 @@ my-tools-sandbox/
 - Нормализует запрос.
 - Выделяет intents и требования к входам/выходам.
 - Генерирует workflow-план на уровне capability.
+- Для известных направлений (YouTube, Google Drive, Yandex Disk URL) строит rule-based план без LLM.
 
 ### `workflow-executor`
 
@@ -90,11 +102,32 @@ my-tools-sandbox/
 - Пробрасывает артефакты между шагами.
 - Сохраняет `state/runs/<run_id>.json`.
 
+Практический шорткат для «сразу обработать сообщение»:
+
+- `make agent TEXT='...'` — автономный вход: `intent-normalizer -> hybrid planner (rule+LLM) -> gap-detector -> policy-engine -> workflow-executor`
+  - В `--output pretty` показывает прогресс по фазам (планирование, gap-check, policy-check, execution/preview) и итог в формате:
+    - `Задача успешно выполнена` + список выполненных операций (`step_id capability`)
+    - `Задача не выполнена` + выполненные операции + недостающие операции
+  - `LLM_LOG=1` печатает секции request/response по каждому LLM-вызову (с call-id, payload, raw body, extracted content и retry-событиями)
+  - Логи LLM появляются только если реально сработал LLM fallback (rule path не сматчился)
+- `make dispatch TEXT='...'` — `request-router (text) -> gap-detector -> workflow-executor`
+- `make dispatch TEXT='...' DRY_RUN=1` — показать команды, не исполняя инструменты
+- `make dispatch` — опциональный путь через capability/workflow-пайплайн; прямой режим работы агента по коду также допустим.
+
 ### `gap-detector`
 
-- Проверяет каждый шаг плана на покрытие.
+- Проверяет каждый шаг плана на покрытие по цепочке:
+  - capability match
+  - contract compatibility gate
+  - confidence gate (для LLM)
 - Генерирует gap-report.
 - При наличии пробелов переводит workflow в режим partial-complete.
+
+### `policy-engine`
+
+- Применяет allow/deny правила по capability.
+- Валидирует лимиты (`max_steps`, `max_tool_retries`, `max_run_seconds`, `max_llm_calls`).
+- Блокирует выполнение с `status=blocked_by_policy`, если политика нарушена.
 
 ### `tool-scaffolder`
 
@@ -116,9 +149,10 @@ my-tools-sandbox/
 Базовый алгоритм выбора:
 
 1. Фильтр по нужной capability.
-2. Проверка совместимости по `input_schema`.
-3. Выбор по приоритету и стабильности.
-4. Если кандидатов нет -> gap-report.
+2. Проверка совместимости по `capability_contract.input_schema` и `capability_contract.output_schema`.
+3. Для LLM-плана: проверка `coverage_confidence` (fail-closed).
+4. Выбор по приоритету и стабильности.
+5. Если кандидатов нет или confidence ниже порога -> gap-report.
 
 ## 6) Пример сценария (YouTube -> Google Drive)
 
@@ -129,11 +163,11 @@ my-tools-sandbox/
 1. `youtube.download` -> `youtube-downloader`
 2. `drive.upload` -> `drive-uploader` (вход: файл из шага 1)
 
-Если `drive-uploader` отсутствует:
+Если утилита для целевой capability отсутствует:
 
-- Шаг 1 выполняется.
-- Шаг 2 помечается как missing.
-- Возвращается gap-report с предложением создать утилиту `drive-uploader`.
+- План получает `status=partial-complete`.
+- Исполнение не запускается.
+- Возвращается gap-report с предложением создать недостающую утилиту.
 
 ## 7) Минимальные правила для масштабирования
 
@@ -150,5 +184,6 @@ my-tools-sandbox/
    - `make registry` — собрать кэш реестра в `state/registry-cache.json`
    - `make resolve CAP=domain.action` — выбрать лучшую утилиту для capability из кэша
 3. Реализовать `request-router` и `gap-detector`.
-4. Добавить `workflow-executor` с логами и retry.
-5. Добавить `tool-scaffolder` для быстрого создания недостающих утилит.
+4. Добавить `workflow-executor` с логами, retry и timeout. ✅
+5. Добавить автономный CLI (`scripts/agent.rb`) с policy-gate и LLM fallback. ✅
+6. Добавить `tool-scaffolder` для быстрого создания недостающих утилит.

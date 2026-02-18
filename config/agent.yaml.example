@@ -1,0 +1,6 @@
+provider: openai_compatible
+model: gpt-4o-mini
+base_url: https://api.openai.com/v1
+api_key: ""
+timeout_seconds: 30
+max_retries: 2

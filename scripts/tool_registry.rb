@@ -171,6 +171,109 @@ module ToolRegistry
     end
   end
 
+  module SchemaSubset
+    module_function
+
+    def subset?(required_schema, available_schema)
+      errors(required_schema, available_schema).empty?
+    end
+
+    def errors(required_schema, available_schema, path: "$")
+      out = []
+      compare(out, required_schema, available_schema, path)
+      out
+    end
+
+    def compare(out, required_schema, available_schema, path)
+      unless required_schema.is_a?(Hash)
+        out << "#{path}: required schema must be an object"
+        return
+      end
+      unless available_schema.is_a?(Hash)
+        out << "#{path}: available schema must be an object"
+        return
+      end
+
+      req_type = required_schema["type"]
+      avail_type = available_schema["type"]
+      if req_type && avail_type && req_type != avail_type
+        out << "#{path}: type mismatch (required=#{req_type.inspect}, available=#{avail_type.inspect})"
+        return
+      end
+      if req_type == "array" || avail_type == "array"
+        compare_array(out, required_schema, available_schema, path)
+        return
+      end
+      if req_type == "object" || avail_type == "object"
+        compare_object(out, required_schema, available_schema, path)
+        return
+      end
+
+      compare_enum(out, required_schema, available_schema, path)
+    end
+
+    def compare_object(out, required_schema, available_schema, path)
+      req_required = normalize_string_array(required_schema["required"])
+      avail_required = normalize_string_array(available_schema["required"])
+      if (avail_required - req_required).any?
+        missing = (avail_required - req_required).sort
+        out << "#{path}: required schema must require #{missing.join(", ")}"
+      end
+
+      req_props = normalize_properties(required_schema["properties"])
+      avail_props = normalize_properties(available_schema["properties"])
+
+      req_props.each do |key, req_prop_schema|
+        avail_prop_schema = avail_props[key]
+        if avail_prop_schema.nil?
+          out << "#{path}.#{key}: property missing in available schema"
+          next
+        end
+        compare(out, req_prop_schema, avail_prop_schema, "#{path}.#{key}")
+      end
+
+    end
+
+    def compare_array(out, required_schema, available_schema, path)
+      req_items = required_schema["items"]
+      avail_items = available_schema["items"]
+      return if req_items.nil?
+      if avail_items.nil?
+        out << "#{path}: array items schema missing in available schema"
+        return
+      end
+      compare(out, req_items, avail_items, "#{path}[]")
+    end
+
+    def compare_enum(out, required_schema, available_schema, path)
+      req_enum = required_schema["enum"]
+      avail_enum = available_schema["enum"]
+      return if req_enum.nil?
+      unless req_enum.is_a?(Array)
+        out << "#{path}: required schema enum must be an array"
+        return
+      end
+      unless avail_enum.is_a?(Array)
+        out << "#{path}: available schema enum must be an array"
+        return
+      end
+      missing = req_enum - avail_enum
+      out << "#{path}: enum values are not covered #{missing.inspect}" unless missing.empty?
+    end
+
+    def normalize_string_array(value)
+      return [] unless value.is_a?(Array)
+      value.select { |v| v.is_a?(String) }
+    end
+
+    def normalize_properties(value)
+      return {} unless value.is_a?(Hash)
+      value.each_with_object({}) do |(k, v), out|
+        out[k] = v if k.is_a?(String) && v.is_a?(Hash)
+      end
+    end
+  end
+
   module_function
 
   def eprint(message)

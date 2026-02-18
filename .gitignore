@@ -30,6 +30,10 @@ venv/
 # Registry cache / run state
 state/
 
+# Local config (secrets)
+config/agent.yaml
+config/policy.yaml
+
 
 # Editors / IDEs
 .vscode/

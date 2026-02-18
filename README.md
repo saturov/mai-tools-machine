@@ -10,6 +10,20 @@
 
 См. `docs/skills-ecosystem-architecture.md` для описания целевой архитектуры экосистемы утилит и скиллов.
 
+Быстрый запуск автономного агента:
+
+```bash
+make agent TEXT='Скачай видео с YouTube и загрузи в папку Google Drive'
+```
+
+Показать сырые запросы/ответы LLM в терминале (structured request/response sections):
+
+```bash
+make agent TEXT='...' PREVIEW=1 LLM_LOG=1
+```
+
+Важно: LLM вызывается только на fallback-пути (если rule-based `request-router` не смог построить план).
+
 ## Статус
 
 Репозиторий в активной разработке. Локальные прототипы могут появляться и исчезать, но актуальные утилиты складываются в `tools/` (например, `tools/youtube-downloader/`).
