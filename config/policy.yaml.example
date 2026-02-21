@@ -1,9 +1,0 @@
-allowed_capabilities:
-  - youtube.download
-  - drive.upload
-denied_capabilities: []
-max_steps: 5
-max_tool_retries: 1
-max_run_seconds: 600
-max_llm_calls: 1
-require_idempotent_for_auto: false

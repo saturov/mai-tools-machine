@@ -12,9 +12,9 @@ module PolicyEngine
 
   def default_policy
     {
-      "allowed_capabilities" => %w[youtube.download drive.upload],
+      "allowed_capabilities" => [],
       "denied_capabilities" => [],
-      "max_steps" => 5,
+      "max_steps" => 10,
       "max_tool_retries" => 1,
       "max_run_seconds" => 600,
       "max_llm_calls" => 1,
