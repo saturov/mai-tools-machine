@@ -19,6 +19,9 @@ my-tools-sandbox/
 │   └── drive-uploader/
 │       ├── tool.yaml
 │       └── run.sh
+│   └── webm-to-mp4-converter/
+│       ├── tool.yaml
+│       └── run.sh
 ├── skills/
 │   ├── request-router/           # Скилл: intent -> план действий
 │   ├── workflow-executor/        # Скилл: выполнение плана и ретраи
@@ -93,7 +96,10 @@ my-tools-sandbox/
 - Нормализует запрос.
 - Выделяет intents и требования к входам/выходам.
 - Генерирует workflow-план на уровне capability.
-- Для известных направлений (YouTube, Google Drive, Yandex Disk URL) строит rule-based план без LLM.
+- Для известных направлений (YouTube, Google Drive, Yandex Disk URL, webm->mp4) строит rule-based план без LLM.
+- Для `video.convert` rule-based путь поддерживает:
+  - `mode=all`: все `.webm` из `input_data`
+  - `mode=selected`: конкретные имена файлов `.webm`
 
 ### `workflow-executor`
 
@@ -101,6 +107,7 @@ my-tools-sandbox/
 - Выполняет шаги по порядку/графу.
 - Пробрасывает артефакты между шагами.
 - Сохраняет `state/runs/<run_id>.json`.
+- Пробрасывает `stderr` утилит в рантайме, поэтому прогресс long-running шагов виден в реальном времени.
 
 Практический шорткат для «сразу обработать сообщение»:
 
@@ -172,7 +179,7 @@ my-tools-sandbox/
 ## 7) Минимальные правила для масштабирования
 
 - Новая утилита обязана добавлять только свою папку в `tools/` и валидный `tool.yaml`.
-- Capability-имена в формате `domain.action` (`youtube.download`, `drive.upload`).
+- Capability-имена в формате `domain.action` (`youtube.download`, `drive.upload`, `video.convert`).
 - Оркестратор не знает о конкретных утилитах, знает только capabilities и контракты.
 - Любой пробел должен автоматически превращаться в machine-readable gap-report.
 

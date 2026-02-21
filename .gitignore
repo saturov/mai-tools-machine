@@ -30,6 +30,12 @@ venv/
 # Registry cache / run state
 state/
 
+# Local workspace artifacts
+BACKLOG.md
+REQUEST_SAMPLES.md
+input_data/*
+output_data/*
+
 # Local config (secrets)
 config/agent.yaml
 config/policy.yaml

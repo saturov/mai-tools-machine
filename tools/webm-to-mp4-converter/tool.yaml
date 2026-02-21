@@ -1,0 +1,72 @@
+name: webm-to-mp4-converter
+version: 0.1.0
+description: "Convert one or many .webm videos from input_data to .mp4 files in output_data."
+capabilities:
+  - video.convert
+entrypoint:
+  type: shell
+  command: "./run.sh"
+input_schema:
+  type: object
+  required:
+    - mode
+    - input_dir
+    - output_dir
+    - overwrite
+  additionalProperties: false
+  properties:
+    mode:
+      type: string
+      enum: ["all", "selected"]
+    files:
+      type: array
+      items:
+        type: string
+    input_dir:
+      type: string
+    output_dir:
+      type: string
+    overwrite:
+      type: boolean
+    jobs:
+      type: integer
+      minimum: 1
+output_schema:
+  type: object
+  required:
+    - converted_count
+    - failed_count
+    - output_files
+    - results
+  additionalProperties: false
+  properties:
+    converted_count:
+      type: integer
+    failed_count:
+      type: integer
+    output_files:
+      type: array
+      items:
+        type: string
+    results:
+      type: array
+      items:
+        type: object
+        required:
+          - input_file
+          - status
+        additionalProperties: true
+        properties:
+          input_file:
+            type: string
+          output_file:
+            type: string
+          status:
+            type: string
+            enum: ["ok", "error"]
+          error:
+            type: string
+dependencies:
+  - ffmpeg
+idempotency: unsafe
+stability: experimental

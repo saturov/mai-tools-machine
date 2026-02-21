@@ -222,4 +222,40 @@ class RequestRouterTest < Minitest::Test
       )
     end
   end
+
+  def test_routes_video_convert_all_from_text
+    text = "Сконвертируй все webm из input_data в mp4 и сохрани в output_data"
+    plan = RequestRouter.build_plan_from_text(text, now: Time.utc(2026, 2, 21, 0, 0, 0))
+
+    assert_equal "planned", plan["status"]
+    assert_equal 1, plan.fetch("steps").length
+
+    step = plan["steps"][0]
+    assert_equal "video.convert", step["capability"]
+    assert_equal "all", step.dig("inputs", "mode")
+    assert_equal "input_data", step.dig("inputs", "input_dir")
+    assert_equal "output_data", step.dig("inputs", "output_dir")
+    assert_equal true, step.dig("inputs", "overwrite")
+    assert_equal [], step.dig("inputs", "files")
+  end
+
+  def test_routes_video_convert_selected_files_from_text
+    text = "Сконвертируй файлы hero.webm, trailer.webm в mp4"
+    plan = RequestRouter.build_plan_from_text(text, now: Time.utc(2026, 2, 21, 0, 0, 0))
+
+    assert_equal "planned", plan["status"]
+    assert_equal 1, plan.fetch("steps").length
+
+    step = plan["steps"][0]
+    assert_equal "video.convert", step["capability"]
+    assert_equal "selected", step.dig("inputs", "mode")
+    assert_equal %w[hero.webm trailer.webm], step.dig("inputs", "files")
+  end
+
+  def test_mixed_video_convert_and_youtube_is_not_supported_in_rule_plan
+    text = "Скачай https://www.youtube.com/watch?v=abc и сконвертируй все webm из input_data в mp4"
+    assert_raises(RequestRouter::ValidationError) do
+      RequestRouter.build_plan_from_text(text, now: Time.utc(2026, 2, 21, 0, 0, 0))
+    end
+  end
 end

@@ -209,6 +209,27 @@ module WorkflowExecutor
       end
 
       argv
+    when "webm-to-mp4-converter"
+      mode = inputs["mode"].to_s.strip
+      input_dir = inputs["input_dir"]
+      output_dir = inputs["output_dir"]
+      raise ValidationError, "video.convert requires input mode (all|selected)" unless %w[all selected].include?(mode)
+      raise ValidationError, "video.convert requires input input_dir" unless input_dir.is_a?(String) && !input_dir.strip.empty?
+      raise ValidationError, "video.convert requires input output_dir" unless output_dir.is_a?(String) && !output_dir.strip.empty?
+
+      argv = base + ["--mode", mode, "--input-dir", input_dir, "--output-dir", output_dir]
+      if mode == "selected"
+        files = Array(inputs["files"]).map { |v| v.to_s.strip }.reject(&:empty?)
+        raise ValidationError, "video.convert requires non-empty files list for mode=selected" if files.empty?
+        files.each { |file| argv += ["--file", file] }
+      end
+      if inputs.key?("overwrite") && inputs["overwrite"] == false
+        argv << "--no-overwrite"
+      end
+      if (jobs = inputs["jobs"]).is_a?(Integer) && jobs.positive?
+        argv += ["--jobs", jobs.to_s]
+      end
+      argv
     else
       raise ValidationError, "Unsupported tool runner for tool #{name.inspect} (id=#{tool["id"].inspect})"
     end
@@ -237,11 +258,55 @@ module WorkflowExecutor
     end
   end
 
-  def execute_tool_command(argv, chdir:, timeout_seconds:)
+  def execute_tool_command(argv, chdir:, timeout_seconds:, stream_stderr: false, stderr_io: $stderr)
+    stdout_buf = +""
+    stderr_buf = +""
+    status = nil
+    wait_thr = nil
+
     Timeout.timeout(timeout_seconds) do
-      Open3.capture3(*argv, chdir: chdir)
+      Open3.popen3(*argv, chdir: chdir) do |stdin, stdout, stderr, wt|
+        wait_thr = wt
+        stdin.close
+
+        stdout_thread = Thread.new do
+          stdout.each_line { |line| stdout_buf << line }
+        rescue IOError
+          nil
+        end
+
+        stderr_thread = Thread.new do
+          stderr.each_line do |line|
+            stderr_buf << line
+            next unless stream_stderr && stderr_io
+            stderr_io.print(line)
+            stderr_io.flush if stderr_io.respond_to?(:flush)
+          end
+        rescue IOError
+          nil
+        end
+
+        stdout_thread.join
+        stderr_thread.join
+        status = wt.value
+      end
     end
+
+    [stdout_buf, stderr_buf, status]
   rescue Timeout::Error
+    if wait_thr&.alive?
+      begin
+        Process.kill("TERM", wait_thr.pid)
+      rescue StandardError
+        nil
+      end
+      sleep(0.2)
+      begin
+        Process.kill("KILL", wait_thr.pid) if wait_thr.alive?
+      rescue StandardError
+        nil
+      end
+    end
     raise ExecutionError.new("Step timed out after #{timeout_seconds}s", code: "tool_timeout")
   end
 
@@ -266,7 +331,12 @@ module WorkflowExecutor
     attempts = 0
     begin
       attempts += 1
-      stdout, stderr, status = execute_tool_command(argv, chdir: tool_dir, timeout_seconds: timeout_seconds)
+      stdout, stderr, status = execute_tool_command(
+        argv,
+        chdir: tool_dir,
+        timeout_seconds: timeout_seconds,
+        stream_stderr: true
+      )
       unless status.success?
         raise ExecutionError.new("Step #{step["step_id"]} failed (#{tool["name"]}): exit=#{status.exitstatus}\n#{stderr}".strip, code: "tool_failed")
       end

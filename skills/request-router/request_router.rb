@@ -74,6 +74,23 @@ module RequestRouter
     text.scan(%r{https?://[^\s)>"']+}i).find { |u| u.match?(/disk\.yandex\.(?:ru|com)/i) }
   end
 
+  def extract_webm_file_names(text)
+    return [] unless text.is_a?(String)
+
+    text.scan(/([^\s,;:()"'<>]+\.webm)\b/i).flatten.map do |token|
+      cleaned = token.to_s.strip.sub(/[.,;:!?]+\z/, "")
+      File.basename(cleaned)
+    end.uniq
+  end
+
+  def video_convert_intent?(text)
+    return false unless text.is_a?(String)
+    s = text.downcase
+    return false unless s.include?("webm")
+    return true if s.match?(/(?:конверт|перекод|преобраз|convert|transcod)/)
+    s.include?("mp4")
+  end
+
   def youtube_url?(value)
     return false unless value.is_a?(String)
     return false if value.strip.empty?
@@ -139,6 +156,45 @@ module RequestRouter
           "required" => [],
           "additionalProperties" => true,
           "properties" => {},
+        },
+      }
+    when "video.convert"
+      {
+        "input_schema" => {
+          "type" => "object",
+          "required" => %w[mode input_dir output_dir overwrite],
+          "additionalProperties" => true,
+          "properties" => {
+            "mode" => { "type" => "string", "enum" => %w[all selected] },
+            "files" => { "type" => "array", "items" => { "type" => "string" } },
+            "input_dir" => { "type" => "string" },
+            "output_dir" => { "type" => "string" },
+            "overwrite" => { "type" => "boolean" },
+          },
+        },
+        "output_schema" => {
+          "type" => "object",
+          "required" => %w[converted_count failed_count output_files results],
+          "additionalProperties" => true,
+          "properties" => {
+            "converted_count" => { "type" => "integer" },
+            "failed_count" => { "type" => "integer" },
+            "output_files" => { "type" => "array", "items" => { "type" => "string" } },
+            "results" => {
+              "type" => "array",
+              "items" => {
+                "type" => "object",
+                "required" => %w[input_file status],
+                "additionalProperties" => true,
+                "properties" => {
+                  "input_file" => { "type" => "string" },
+                  "output_file" => { "type" => "string" },
+                  "status" => { "type" => "string", "enum" => %w[ok error] },
+                  "error" => { "type" => "string" },
+                },
+              },
+            },
+          },
         },
       }
     else
@@ -290,6 +346,15 @@ module RequestRouter
     yandex_disk_url = extract_yandex_disk_url(text)
     inputs["yandex_disk_url"] = yandex_disk_url if yandex_disk_url
 
+    if video_convert_intent?(text)
+      files = extract_webm_file_names(text)
+      inputs["video_convert_mode"] = files.empty? ? "all" : "selected"
+      inputs["video_convert_files"] = files unless files.empty?
+      inputs["video_convert_input_dir"] = "input_data"
+      inputs["video_convert_output_dir"] = "output_data"
+      inputs["video_convert_overwrite"] = true
+    end
+
     {
       "request_id" => generate_request_id(now),
       "user_goal" => text.strip,
@@ -322,6 +387,53 @@ module RequestRouter
     wants_youtube = inputs.key?("youtube_url") || youtube_url?(inputs["url"])
     wants_drive = inputs.key?("drive_folder_id") || inputs.key?("folder_id")
     wants_yandex_disk = inputs.key?("yandex_disk_url")
+    wants_video_convert = inputs.key?("video_convert_mode") || inputs.key?("video_convert_files")
+
+    if wants_video_convert && (wants_youtube || wants_drive || wants_yandex_disk)
+      raise ValidationError, "No route rules matched: mixed video.convert and upload/download intents are not supported in one rule-based plan."
+    end
+
+    if wants_video_convert
+      mode = inputs["video_convert_mode"].to_s.strip.downcase
+      mode = "selected" if mode.empty? && inputs["video_convert_files"].is_a?(Array)
+      mode = "all" if mode.empty?
+      unless %w[all selected].include?(mode)
+        raise ValidationError, "inputs.video_convert_mode must be one of: all, selected"
+      end
+
+      files = Array(inputs["video_convert_files"]).map { |v| File.basename(v.to_s.strip) }.reject(&:empty?).uniq
+      if mode == "selected"
+        raise ValidationError, "inputs.video_convert_files must include at least one .webm file for mode=selected" if files.empty?
+        invalid = files.reject { |name| name.downcase.end_with?(".webm") }
+        raise ValidationError, "inputs.video_convert_files must contain only .webm file names" unless invalid.empty?
+      end
+
+      input_dir = inputs["video_convert_input_dir"].to_s.strip
+      input_dir = "input_data" if input_dir.empty?
+      output_dir = inputs["video_convert_output_dir"].to_s.strip
+      output_dir = "output_data" if output_dir.empty?
+      overwrite = inputs.key?("video_convert_overwrite") ? inputs["video_convert_overwrite"] == true : true
+
+      steps << {
+        "step_id" => "step-1",
+        "capability" => "video.convert",
+        "tool" => nil,
+        "coverage_confidence" => 1.0,
+        "coverage_rationale" => "rule_matched",
+        "inputs" => {
+          "mode" => mode,
+          "files" => files,
+          "input_dir" => input_dir,
+          "output_dir" => output_dir,
+          "overwrite" => overwrite,
+        },
+        "capability_contract" => capability_contract_for("video.convert"),
+        "risk_level" => "low",
+        "idempotency_required" => false,
+        "planner_source" => "rule",
+        "approval_required" => false,
+      }
+    end
 
     if wants_youtube
       source_key = inputs.key?("youtube_url") ? "youtube_url" : "url"
@@ -411,7 +523,7 @@ module RequestRouter
 
     if steps.empty?
       raise ValidationError,
-            "No route rules matched: provide inputs.youtube_url (or inputs.url with YouTube domain), inputs.drive_folder_id and/or inputs.yandex_disk_url. " \
+            "No route rules matched: provide inputs.youtube_url (or inputs.url with YouTube domain), inputs.drive_folder_id, inputs.yandex_disk_url, or video.convert inputs. " \
             "For free-form goals, use agent LLM fallback with AGENT_API_KEY or ZAI_API_KEY."
     end
 

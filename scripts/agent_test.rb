@@ -128,6 +128,31 @@ class AgentTest < Minitest::Test
     end
   end
 
+  def test_dry_run_preview_for_video_convert_rule_path
+    Dir.mktmpdir do |dir|
+      output = File.join(dir, "out.json")
+      code = Agent.run_from_text(
+        "Сконвертируй все webm из input_data в mp4",
+        execute: false,
+        dry_run: true,
+        output_format: "json",
+        output_path: output,
+        config_path: File.join(dir, "missing-agent.yaml"),
+        policy_path: File.join(dir, "missing-policy.yaml"),
+        provider: nil,
+        model: nil,
+        registry_path: registry_path,
+        runs_dir: dir
+      )
+      assert_equal 0, code
+      payload = JSON.parse(File.read(output))
+      assert_equal "preview", payload["status"]
+      assert_equal "video.convert", payload.dig("plan", "steps", 0, "capability")
+      assert_equal "all", payload.dig("plan", "steps", 0, "inputs", "mode")
+      assert_equal "dry-run", payload.dig("run", "status")
+    end
+  end
+
   def test_blocks_when_policy_denies_capability
     Dir.mktmpdir do |dir|
       output = File.join(dir, "out.json")

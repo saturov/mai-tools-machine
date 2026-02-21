@@ -60,6 +60,40 @@ class WorkflowExecutorTest < Minitest::Test
     assert_equal request.dig("inputs", "drive_folder_id"), argv2[4]
   end
 
+  def test_dry_run_builds_expected_argv_for_video_convert
+    text = "Сконвертируй файлы intro.webm и outro.webm в mp4"
+    request = RequestRouter.build_request_from_text(text, now: Time.utc(2026, 2, 21, 0, 0, 0))
+    plan = RequestRouter.build_plan(request, now: Time.utc(2026, 2, 21, 0, 0, 0))
+    GapDetector.apply!(plan, registry_path: registry_path)
+    assert_equal "complete", plan["status"]
+
+    registry = ToolRegistry.load_registry!(registry_path)
+    by_id = registry.dig("index", "by_id")
+    step = plan["steps"][0]
+    tool = by_id.fetch(step["tool"])
+
+    res = WorkflowExecutor.execute_step!(
+      step,
+      tool,
+      request_inputs: request.fetch("inputs").transform_keys(&:to_s),
+      step_outputs: {},
+      dry_run: true
+    )
+
+    assert_equal "dry-run", res["status"]
+    argv = res["argv"]
+    assert_equal "./run.sh", argv[0]
+    assert_equal "--mode", argv[1]
+    assert_equal "selected", argv[2]
+    assert_includes argv, "--input-dir"
+    assert_includes argv, "input_data"
+    assert_includes argv, "--output-dir"
+    assert_includes argv, "output_data"
+    assert_equal 2, argv.count("--file")
+    assert_includes argv, "intro.webm"
+    assert_includes argv, "outro.webm"
+  end
+
   def test_run_plan_raises_execution_failed_with_progress
     request = example_request
     plan = RequestRouter.build_plan(request, now: Time.utc(2026, 2, 17, 0, 0, 0))

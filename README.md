@@ -19,6 +19,14 @@ make agent TEXT='Скачай видео с ютуба {URL_1} и загрузи
 
 Ожидаемый результат: видео скачано с YouTube и загружено в указанную папку на Google Drive.
 
+Ещё пример:
+
+```bash
+make agent TEXT='Сконвертируй все webm из input_data в mp4'
+```
+
+Ожидаемый результат: все `.webm` из `input_data` конвертированы в `.mp4` и сохранены в `output_data`.
+
 ## Конфигурация LLM
 
 1) Скопируйте пример в рабочий конфиг:
@@ -37,6 +45,7 @@ cp config/agent.yaml.example config/agent.yaml
 
 - `youtube-downloader` — скачивает видео YouTube в MP4 в 720p.
 - `drive-uploader` — загружает локальный файл в папку Google Drive.
+- `webm-to-mp4-converter` — конвертирует один или несколько `.webm` в `.mp4` (`input_data` -> `output_data`).
 
 ## Как добавить свою утилиту
 
