@@ -43,9 +43,22 @@ cp config/agent.yaml.example config/agent.yaml
 
 ## Реализованные утилиты
 
-- `youtube-downloader` — скачивает видео YouTube в MP4 в 720p.
+- `youtube-downloader` — скачивает видео YouTube в MP4 с целевым качеством:
+  - `target_quality` берется из запроса агента; если не указан, используется `720p`;
+  - в `strict` режиме сначала ищется exact quality (например `1080p`), затем fallback на лучший доступный `<= target`;
+  - использует retry-цепочку с cookies браузера (`chrome` -> `safari` -> `firefox`) для кейсов с ограничениями доступа;
+  - в результате шага доступны `target_quality`, `actual_quality`, `fallback`.
 - `drive-uploader` — загружает локальный файл в папку Google Drive.
 - `webm-to-mp4-converter` — конвертирует один или несколько `.webm` в `.mp4` (`input_data` -> `output_data`).
+
+### Переменные окружения для `youtube-downloader`
+
+- `YT_COOKIES_FROM_BROWSER` — браузер для импорта cookies (по умолчанию `chrome`).
+- `YT_TARGET_QUALITY` — желаемая высота видео (по умолчанию `720`).
+- `YT_MIN_HEIGHT` — legacy alias для `YT_TARGET_QUALITY`.
+- `YT_QUALITY_POLICY` — `strict` или `best_effort` (по умолчанию `strict`).
+- `YT_PO_TOKEN_ANDROID` — PO token для Android-клиента YouTube (опционально).
+- `YT_PO_TOKEN_IOS` — PO token для iOS-клиента YouTube (опционально).
 
 ## Как добавить свою утилиту
 

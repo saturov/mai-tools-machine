@@ -10,6 +10,10 @@ require "yaml"
 module RequestRouter
   class ValidationError < StandardError; end
 
+  DEFAULT_TARGET_QUALITY = 720
+  MIN_TARGET_QUALITY = 144
+  MAX_TARGET_QUALITY = 4320
+
   module_function
 
   def repo_root
@@ -83,6 +87,48 @@ module RequestRouter
     end.uniq
   end
 
+  def normalize_target_quality(value)
+    parsed =
+      case value
+      when Integer
+        value
+      when String
+        stripped = value.strip
+        return nil if stripped.empty?
+        Integer(stripped, 10)
+      else
+        nil
+      end
+    return nil if parsed.nil?
+    return nil if parsed < MIN_TARGET_QUALITY || parsed > MAX_TARGET_QUALITY
+
+    parsed
+  rescue ArgumentError
+    nil
+  end
+
+  def extract_target_quality(text)
+    return nil unless text.is_a?(String)
+    return nil if text.strip.empty?
+
+    patterns = [
+      /(?:в\s+качеств[ео]|качество)\s*(\d{3,4})(?:p)?\b/i,
+      /\b(\d{3,4})\s*p\b/i,
+    ]
+    patterns.each do |pattern|
+      match = text.match(pattern)
+      next unless match
+      parsed = normalize_target_quality(match[1])
+      return parsed unless parsed.nil?
+    end
+    nil
+  end
+
+  def resolved_target_quality(inputs)
+    value = normalize_target_quality(inputs["target_quality"])
+    value || DEFAULT_TARGET_QUALITY
+  end
+
   def video_convert_intent?(text)
     return false unless text.is_a?(String)
     s = text.downcase
@@ -110,13 +156,26 @@ module RequestRouter
           "type" => "object",
           "required" => ["url"],
           "additionalProperties" => true,
-          "properties" => { "url" => { "type" => "string" } },
+          "properties" => {
+            "url" => { "type" => "string" },
+            "cookies_from_browser" => { "type" => "string" },
+            "target_quality" => { "type" => "integer" },
+            "min_height" => { "type" => "integer" },
+            "quality_policy" => { "type" => "string", "enum" => %w[strict best_effort] },
+            "player_clients" => { "type" => "array", "items" => { "type" => "string" } },
+          },
         },
         "output_schema" => {
           "type" => "object",
           "required" => ["file_path"],
           "additionalProperties" => true,
-          "properties" => { "file_path" => { "type" => "string" } },
+          "properties" => {
+            "file_path" => { "type" => "string" },
+            "target_quality" => { "type" => "integer" },
+            "actual_quality" => { "type" => "integer" },
+            "fallback" => { "type" => "boolean" },
+            "fallback_reason" => { "type" => "string" },
+          },
         },
       }
     when "drive.upload"
@@ -339,6 +398,12 @@ module RequestRouter
 
     youtube_url = extract_youtube_url(text)
     inputs["youtube_url"] = youtube_url if youtube_url
+    extracted_target_quality = extract_target_quality(text)
+    if youtube_url
+      inputs["target_quality"] = extracted_target_quality || DEFAULT_TARGET_QUALITY
+    elsif !extracted_target_quality.nil?
+      inputs["target_quality"] = extracted_target_quality
+    end
 
     drive_folder_id = extract_drive_folder_id(text)
     inputs["drive_folder_id"] = drive_folder_id if drive_folder_id
@@ -440,6 +505,7 @@ module RequestRouter
       url_value = inputs[source_key]
       nonempty_string!(url_value, label: "inputs.#{source_key}")
       raise ValidationError, "inputs.#{source_key} must be a YouTube URL" unless youtube_url?(url_value)
+      target_quality = resolved_target_quality(inputs)
 
       steps << {
         "step_id" => "step-1",
@@ -449,6 +515,7 @@ module RequestRouter
         "coverage_rationale" => "rule_matched",
         "inputs" => {
           "url" => { "from" => "request.inputs.#{source_key}" },
+          "target_quality" => target_quality,
         },
         "capability_contract" => capability_contract_for("youtube.download"),
         "risk_level" => "low",

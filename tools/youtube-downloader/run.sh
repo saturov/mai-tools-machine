@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 
 URL="${1:-}"
 if [[ -z "$URL" ]]; then
-  echo "Usage: ./run.sh <youtube_url> [--cookies-from-browser <browser>]" >&2
+  echo "Usage: ./run.sh <youtube_url> [--target-quality <height>] [--cookies-from-browser <browser>]" >&2
   exit 1
 fi
 shift || true
@@ -19,6 +19,7 @@ PYTHON="${PYTHON:-python3}"
 VENV_DIR="${VENV_DIR:-.venv}"
 VENV_PY="$VENV_DIR/bin/python"
 PIP="$VENV_PY -m pip"
+export PIP_DISABLE_PIP_VERSION_CHECK=1
 
 if [[ ! -x "$VENV_PY" ]]; then
   "$PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' || {

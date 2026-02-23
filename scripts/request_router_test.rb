@@ -106,6 +106,23 @@ class RequestRouterTest < Minitest::Test
     end
   end
 
+  def test_youtube_capability_contract_includes_quality_inputs
+    contract = RequestRouter.capability_contract_for("youtube.download")
+    input_props = contract.dig("input_schema", "properties")
+    output_props = contract.dig("output_schema", "properties")
+
+    assert_equal "string", input_props.dig("url", "type")
+    assert_equal "string", input_props.dig("cookies_from_browser", "type")
+    assert_equal "integer", input_props.dig("target_quality", "type")
+    assert_equal "integer", input_props.dig("min_height", "type")
+    assert_equal %w[strict best_effort], input_props.dig("quality_policy", "enum")
+    assert_equal "array", input_props.dig("player_clients", "type")
+    assert_equal "string", input_props.dig("player_clients", "items", "type")
+    assert_equal "integer", output_props.dig("target_quality", "type")
+    assert_equal "integer", output_props.dig("actual_quality", "type")
+    assert_equal "boolean", output_props.dig("fallback", "type")
+  end
+
   def test_routes_youtube_then_drive_from_example_request
     request_path = File.expand_path("../templates/workflow/request.example.yaml", __dir__)
     request = YAML.safe_load(File.read(request_path))
@@ -146,6 +163,7 @@ class RequestRouterTest < Minitest::Test
 
     assert_equal "youtube.download", step1["capability"]
     assert_equal "request.inputs.youtube_url", step1.dig("inputs", "url", "from")
+    assert_equal 720, step1.dig("inputs", "target_quality")
 
     assert_equal "drive.upload", step2["capability"]
     assert_equal "request.inputs.drive_folder_id", step2.dig("inputs", "folder_id", "from")
@@ -165,9 +183,37 @@ class RequestRouterTest < Minitest::Test
 
     assert_equal "youtube.download", step1["capability"]
     assert_equal "request.inputs.youtube_url", step1.dig("inputs", "url", "from")
+    assert_equal 720, step1.dig("inputs", "target_quality")
 
     assert_equal "yandex.disk.upload", step2["capability"]
     assert_equal "request.inputs.yandex_disk_url", step2.dig("inputs", "destination_url", "from")
+  end
+
+  def test_extracts_target_quality_from_text_pattern_v_kachestve
+    text = "Скачай https://www.youtube.com/watch?v=abc в качестве 1080"
+    request = RequestRouter.build_request_from_text(text, now: Time.utc(2026, 2, 22, 0, 0, 0))
+    plan = RequestRouter.build_plan(request, now: Time.utc(2026, 2, 22, 0, 0, 0))
+
+    assert_equal 1080, request.dig("inputs", "target_quality")
+    assert_equal 1080, plan.dig("steps", 0, "inputs", "target_quality")
+  end
+
+  def test_extracts_target_quality_from_text_pattern_np
+    text = "Скачай https://youtu.be/abc123 360p"
+    request = RequestRouter.build_request_from_text(text, now: Time.utc(2026, 2, 22, 0, 0, 0))
+    plan = RequestRouter.build_plan(request, now: Time.utc(2026, 2, 22, 0, 0, 0))
+
+    assert_equal 360, request.dig("inputs", "target_quality")
+    assert_equal 360, plan.dig("steps", 0, "inputs", "target_quality")
+  end
+
+  def test_uses_default_target_quality_when_not_specified
+    text = "Скачай https://www.youtube.com/watch?v=abc"
+    request = RequestRouter.build_request_from_text(text, now: Time.utc(2026, 2, 22, 0, 0, 0))
+    plan = RequestRouter.build_plan(request, now: Time.utc(2026, 2, 22, 0, 0, 0))
+
+    assert_equal 720, request.dig("inputs", "target_quality")
+    assert_equal 720, plan.dig("steps", 0, "inputs", "target_quality")
   end
 
   def test_hybrid_falls_back_to_llm_when_rules_do_not_match

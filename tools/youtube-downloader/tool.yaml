@@ -1,6 +1,6 @@
 name: youtube-downloader
 version: 0.1.0
-description: "Download a YouTube video as MP4 up to 720p."
+description: "Download a YouTube video as MP4 with requested target quality and fallback."
 capabilities:
   - youtube.download
 entrypoint:
@@ -14,8 +14,24 @@ input_schema:
   properties:
     url:
       type: string
+    target_quality:
+      type: integer
+      default: 720
     cookies_from_browser:
       type: string
+    min_height:
+      type: integer
+      default: 720
+    quality_policy:
+      type: string
+      enum:
+        - strict
+        - best_effort
+      default: strict
+    player_clients:
+      type: array
+      items:
+        type: string
 output_schema:
   type: object
   required:
@@ -23,6 +39,14 @@ output_schema:
   additionalProperties: false
   properties:
     file_path:
+      type: string
+    target_quality:
+      type: integer
+    actual_quality:
+      type: integer
+    fallback:
+      type: boolean
+    fallback_reason:
       type: string
 dependencies:
   - ffmpeg

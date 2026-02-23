@@ -47,6 +47,13 @@ module WorkflowExecutor
 
   module_function
 
+  def emit_event(handler, payload)
+    return unless handler
+    handler.call(payload)
+  rescue StandardError
+    nil
+  end
+
   def repo_root
     @repo_root ||= Pathname.new(__dir__).join("..", "..").expand_path
   end
@@ -173,6 +180,19 @@ module WorkflowExecutor
       argv = base + [url]
       if (cookies = inputs["cookies_from_browser"]).is_a?(String) && !cookies.strip.empty?
         argv += ["--cookies-from-browser", cookies]
+      end
+      if (target_quality = inputs["target_quality"]).is_a?(Integer) && target_quality.positive?
+        argv += ["--target-quality", target_quality.to_s]
+      end
+      if (min_height = inputs["min_height"]).is_a?(Integer) && min_height.positive?
+        argv += ["--min-height", min_height.to_s]
+      end
+      if (quality_policy = inputs["quality_policy"]).is_a?(String) && !quality_policy.strip.empty?
+        argv += ["--quality-policy", quality_policy]
+      end
+      clients = Array(inputs["player_clients"]).map { |v| v.to_s.strip }.reject(&:empty?)
+      clients.each do |client|
+        argv += ["--player-client", client]
       end
       argv
     when "drive-uploader"
@@ -310,13 +330,25 @@ module WorkflowExecutor
     raise ExecutionError.new("Step timed out after #{timeout_seconds}s", code: "tool_timeout")
   end
 
-  def execute_step!(step, tool, request_inputs:, step_outputs:, dry_run:, max_retries: 0, timeout_seconds: 300)
+  def execute_step!(step, tool, request_inputs:, step_outputs:, dry_run:, max_retries: 0, timeout_seconds: 300, event_handler: nil, step_index: nil, total_steps: nil, stream_tool_stderr: true)
     resolved_inputs = resolve_step_inputs(step, request_inputs: request_inputs, step_outputs: step_outputs, allow_unresolved: dry_run)
     argv = argv_for_tool(tool, resolved_inputs)
     tool_dir = tool_dir_for(tool)
 
     if dry_run
-      return {
+      emit_event(
+        event_handler,
+        {
+          "type" => "step_attempt_started",
+          "step_id" => step["step_id"],
+          "capability" => step["capability"],
+          "step_index" => step_index,
+          "total_steps" => total_steps,
+          "attempt" => 1,
+          "max_attempts" => 1,
+        }
+      )
+      result = {
         "step_id" => step["step_id"],
         "capability" => step["capability"],
         "tool" => tool["id"],
@@ -326,16 +358,43 @@ module WorkflowExecutor
         "outputs" => {},
         "status" => "dry-run",
       }
+      emit_event(
+        event_handler,
+        {
+          "type" => "step_succeeded",
+          "step_id" => step["step_id"],
+          "capability" => step["capability"],
+          "step_index" => step_index,
+          "total_steps" => total_steps,
+          "attempt" => 1,
+          "max_attempts" => 1,
+          "elapsed_seconds" => 0,
+        }
+      )
+      return result
     end
 
     attempts = 0
     begin
       attempts += 1
+      emit_event(
+        event_handler,
+        {
+          "type" => "step_attempt_started",
+          "step_id" => step["step_id"],
+          "capability" => step["capability"],
+          "step_index" => step_index,
+          "total_steps" => total_steps,
+          "attempt" => attempts,
+          "max_attempts" => max_retries.to_i + 1,
+        }
+      )
+      attempt_started_at = Time.now
       stdout, stderr, status = execute_tool_command(
         argv,
         chdir: tool_dir,
         timeout_seconds: timeout_seconds,
-        stream_stderr: true
+        stream_stderr: stream_tool_stderr
       )
       unless status.success?
         raise ExecutionError.new("Step #{step["step_id"]} failed (#{tool["name"]}): exit=#{status.exitstatus}\n#{stderr}".strip, code: "tool_failed")
@@ -344,7 +403,7 @@ module WorkflowExecutor
       outputs = parse_tool_output(tool, stdout)
       raise ExecutionError.new("Tool output must be an object/map", code: "tool_invalid_output") unless outputs.is_a?(Hash)
 
-      return {
+      result = {
         "step_id" => step["step_id"],
         "capability" => step["capability"],
         "tool" => tool["id"],
@@ -358,13 +417,69 @@ module WorkflowExecutor
         "exit_code" => status.exitstatus,
         "attempts" => attempts,
       }
+      quality_payload = {}
+      if step["capability"] == "youtube.download"
+        target_quality = outputs["target_quality"]
+        actual_quality = outputs["actual_quality"]
+        fallback = outputs["fallback"]
+        quality_payload["target_quality"] = target_quality if target_quality.is_a?(Integer)
+        if outputs.key?("actual_quality")
+          quality_payload["actual_quality"] =
+            actual_quality.is_a?(Integer) ? actual_quality : "unknown"
+        end
+        quality_payload["fallback"] = fallback if fallback == true || fallback == false
+      end
+      emit_event(
+        event_handler,
+        {
+          "type" => "step_succeeded",
+          "step_id" => step["step_id"],
+          "capability" => step["capability"],
+          "step_index" => step_index,
+          "total_steps" => total_steps,
+          "attempt" => attempts,
+          "max_attempts" => max_retries.to_i + 1,
+          "elapsed_seconds" => Time.now - attempt_started_at,
+        }.merge(quality_payload)
+      )
+      return result
     rescue ExecutionError => e
-      retry if attempts <= max_retries
+      if attempts <= max_retries
+        emit_event(
+          event_handler,
+          {
+            "type" => "step_retry",
+            "step_id" => step["step_id"],
+            "capability" => step["capability"],
+            "step_index" => step_index,
+            "total_steps" => total_steps,
+            "attempt" => attempts,
+            "max_attempts" => max_retries.to_i + 1,
+            "error_code" => e.code,
+            "message" => e.message,
+          }
+        )
+        retry
+      end
+      emit_event(
+        event_handler,
+        {
+          "type" => "step_failed",
+          "step_id" => step["step_id"],
+          "capability" => step["capability"],
+          "step_index" => step_index,
+          "total_steps" => total_steps,
+          "attempt" => attempts,
+          "max_attempts" => max_retries.to_i + 1,
+          "error_code" => e.code,
+          "message" => e.message,
+        }
+      )
       raise e
     end
   end
 
-  def run_plan!(plan, request, registry_path: default_registry_path, runs_dir: default_runs_dir, dry_run: false, max_tool_retries: 0, timeout_seconds: 300, now: Time.now.utc)
+  def run_plan!(plan, request, registry_path: default_registry_path, runs_dir: default_runs_dir, dry_run: false, max_tool_retries: 0, timeout_seconds: 300, now: Time.now.utc, event_handler: nil, stream_tool_stderr: true)
     raise ValidationError.new("plan.status must be 'complete' to execute", code: "validation") unless dry_run || plan["status"] == "complete"
 
     request_inputs = (request["inputs"].is_a?(Hash) ? request["inputs"] : {}).transform_keys(&:to_s)
@@ -394,7 +509,11 @@ module WorkflowExecutor
           step_outputs: step_outputs,
           dry_run: dry_run,
           max_retries: max_tool_retries,
-          timeout_seconds: timeout_seconds
+          timeout_seconds: timeout_seconds,
+          event_handler: event_handler,
+          step_index: idx + 1,
+          total_steps: steps.length,
+          stream_tool_stderr: stream_tool_stderr
         )
       rescue ExecutionError => e
         remaining_steps = steps[idx..] || []

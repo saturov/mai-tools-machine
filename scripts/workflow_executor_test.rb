@@ -94,6 +94,50 @@ class WorkflowExecutorTest < Minitest::Test
     assert_includes argv, "outro.webm"
   end
 
+  def test_dry_run_builds_expected_argv_for_youtube_options
+    registry = ToolRegistry.load_registry!(registry_path)
+    by_id = registry.dig("index", "by_id")
+    youtube_tool_id = registry.dig("index", "by_capability", "youtube.download").first
+    tool = by_id.fetch(youtube_tool_id)
+
+    step = {
+      "step_id" => "step-1",
+      "capability" => "youtube.download",
+      "inputs" => {
+        "url" => "https://youtu.be/abc123",
+        "cookies_from_browser" => "chrome",
+        "target_quality" => 1080,
+        "min_height" => 720,
+        "quality_policy" => "strict",
+        "player_clients" => %w[web android],
+      },
+    }
+
+    res = WorkflowExecutor.execute_step!(
+      step,
+      tool,
+      request_inputs: {},
+      step_outputs: {},
+      dry_run: true
+    )
+
+    argv = res["argv"]
+    assert_equal "dry-run", res["status"]
+    assert_equal "./run.sh", argv[0]
+    assert_equal "https://youtu.be/abc123", argv[1]
+    assert_includes argv, "--cookies-from-browser"
+    assert_includes argv, "chrome"
+    assert_includes argv, "--target-quality"
+    assert_includes argv, "1080"
+    assert_includes argv, "--min-height"
+    assert_includes argv, "720"
+    assert_includes argv, "--quality-policy"
+    assert_includes argv, "strict"
+    assert_equal 2, argv.count("--player-client")
+    assert_includes argv, "web"
+    assert_includes argv, "android"
+  end
+
   def test_run_plan_raises_execution_failed_with_progress
     request = example_request
     plan = RequestRouter.build_plan(request, now: Time.utc(2026, 2, 17, 0, 0, 0))
