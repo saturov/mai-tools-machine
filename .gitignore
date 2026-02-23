@@ -33,6 +33,7 @@ state/
 # Local workspace artifacts
 BACKLOG.md
 REQUEST_SAMPLES.md
+PRD.md
 input_data/*
 output_data/*
 

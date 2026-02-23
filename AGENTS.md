@@ -37,6 +37,7 @@
 - Запустить unit-тесты реестра: `make test-registry`
 
 ## Change Policy
+- Для проектирования задачи по добавлению новой утилиты использовать шаблон: [schemas/prd-task-template.md](schemas/prd-task-template.md).
 - Для изменений в `tools/*/tool.yaml` обязательно прогонять:
   1. `make validate-manifests`
   2. `make registry`

@@ -60,6 +60,9 @@
 Минусы:
 - Появилась зависимость тестового контура от `SimpleCov`/`Bundler`.
 
+## Добавление новых утилит
+- Шаблон PRD для проектирования задачи: `schemas/prd-task-template.md`.
+
 ## Затронутые файлы
 - `scripts/agent.rb`
 - `scripts/llm_client.rb`
@@ -71,3 +74,4 @@
 - `scripts/logging/logging_suite_test.rb`
 - `Makefile`
 - `Gemfile`
+- `schemas/prd-task-template.md`
