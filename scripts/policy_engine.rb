@@ -80,12 +80,25 @@ module PolicyEngine
     end
 
     if report.empty?
-      { "status" => "ok", "policy" => policy, "violations" => [] }
+      {
+        "status" => "ok",
+        "policy" => policy,
+        "violations" => [],
+        "verdict" => "allow",
+        "risk" => "low",
+        "reason" => "policy_passed",
+        "confirmation_required" => "no",
+      }
     else
+      first_reason = report.first.is_a?(Hash) ? report.first["reason"].to_s : "policy_violation"
       {
         "status" => "blocked_by_policy",
         "policy" => policy,
         "violations" => report,
+        "verdict" => "deny",
+        "risk" => "high",
+        "reason" => first_reason.empty? ? "policy_violation" : first_reason,
+        "confirmation_required" => "no",
       }
     end
   end

@@ -5,6 +5,8 @@ require "json"
 require "net/http"
 require "uri"
 
+require_relative "logging/llm_trace_logger"
+
 module LLMClient
   class Error < StandardError
     attr_reader :code
@@ -20,9 +22,9 @@ module LLMClient
     DEFAULT_TIMEOUT_SECONDS = 30
     DEFAULT_MAX_RETRIES = 2
 
-    attr_reader :provider, :model, :base_url, :api_key, :timeout_seconds, :max_retries, :log_io
+    attr_reader :provider, :model, :base_url, :api_key, :timeout_seconds, :max_retries, :log_io, :logger
 
-    def initialize(provider:, model:, base_url:, api_key:, timeout_seconds: DEFAULT_TIMEOUT_SECONDS, max_retries: DEFAULT_MAX_RETRIES, log_io: nil)
+    def initialize(provider:, model:, base_url:, api_key:, timeout_seconds: DEFAULT_TIMEOUT_SECONDS, max_retries: DEFAULT_MAX_RETRIES, log_io: nil, logger: nil)
       @provider = provider.to_s
       @model = model.to_s
       @base_url = base_url.to_s
@@ -30,12 +32,13 @@ module LLMClient
       @timeout_seconds = timeout_seconds.to_i
       @max_retries = max_retries.to_i
       @log_io = log_io
+      @logger = logger || build_logger_from_io(log_io)
       @call_seq = 0
 
       validate!
     end
 
-    def self.from_settings(settings, log_io: nil)
+    def self.from_settings(settings, log_io: nil, logger: nil)
       provider = settings.fetch("provider", "openai_compatible")
       model = settings.fetch("model", "")
       base_url = settings.fetch("base_url", DEFAULT_BASE_URL)
@@ -50,7 +53,8 @@ module LLMClient
         api_key: api_key,
         timeout_seconds: timeout,
         max_retries: retries,
-        log_io: log_io
+        log_io: log_io,
+        logger: logger
       )
     end
 
@@ -217,40 +221,29 @@ module LLMClient
       "call-#{@call_seq}"
     end
 
-    def log_llm_request(call_id, uri, model_name, payload)
-      return if log_io.nil?
+    def build_logger_from_io(io)
+      return nil if io.nil?
+      AgentLogging::LLMTraceLogger.new(io)
+    end
 
-      log_io.puts("[llm][#{call_id}] request")
-      log_io.puts("endpoint: #{uri}")
-      log_io.puts("model: #{model_name}")
-      log_io.puts("payload:")
-      log_io.puts(JSON.pretty_generate(payload))
-      log_io.flush if log_io.respond_to?(:flush)
+    def log_llm_request(call_id, uri, model_name, payload)
+      return if logger.nil?
+      logger.request(call_id: call_id, endpoint: uri, model: model_name, payload: payload)
     end
 
     def log_llm_response(call_id, status_code, raw_body)
-      return if log_io.nil?
-
-      log_io.puts("[llm][#{call_id}] response")
-      log_io.puts("http_status: #{status_code}")
-      log_io.puts("raw_body:")
-      log_io.puts(raw_body)
-      log_io.flush if log_io.respond_to?(:flush)
+      return if logger.nil?
+      logger.response(call_id: call_id, http_status: status_code, raw_body: raw_body)
     end
 
     def log_llm_content(call_id, content)
-      return if log_io.nil?
-
-      log_io.puts("[llm][#{call_id}] extracted_content:")
-      log_io.puts(content)
-      log_io.flush if log_io.respond_to?(:flush)
+      return if logger.nil?
+      logger.content(call_id: call_id, extracted_content: content)
     end
 
     def log_llm_retry(call_id, next_attempt, reason)
-      return if log_io.nil?
-
-      log_io.puts("[llm][#{call_id}] retry attempt=#{next_attempt} reason=#{reason}")
-      log_io.flush if log_io.respond_to?(:flush)
+      return if logger.nil?
+      logger.retry(call_id: call_id, next_attempt: next_attempt, reason: reason)
     end
   end
 end

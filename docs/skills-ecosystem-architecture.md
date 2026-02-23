@@ -97,6 +97,7 @@ my-tools-sandbox/
 - Выделяет intents и требования к входам/выходам.
 - Генерирует workflow-план на уровне capability.
 - Для известных направлений (YouTube, Google Drive, Yandex Disk URL, webm->mp4) строит rule-based план без LLM.
+- Для `youtube.download` извлекает `target_quality` из prompt (`в качестве N`, `качество N`, `Np`), иначе ставит дефолт `720`.
 - Для `video.convert` rule-based путь поддерживает:
   - `mode=all`: все `.webm` из `input_data`
   - `mode=selected`: конкретные имена файлов `.webm`
@@ -108,13 +109,19 @@ my-tools-sandbox/
 - Пробрасывает артефакты между шагами.
 - Сохраняет `state/runs/<run_id>.json`.
 - Пробрасывает `stderr` утилит в рантайме, поэтому прогресс long-running шагов виден в реальном времени.
+- Для `youtube.download` в status-события шага пробрасываются `target_quality`, `actual_quality`, `quality_fallback`.
 
 Практический шорткат для «сразу обработать сообщение»:
 
 - `make agent TEXT='...'` — автономный вход: `intent-normalizer -> hybrid planner (rule+LLM) -> gap-detector -> policy-engine -> workflow-executor`
-  - В `--output pretty` показывает прогресс по фазам (планирование, gap-check, policy-check, execution/preview) и итог в формате:
-    - `Задача успешно выполнена` + список выполненных операций (`step_id capability`)
-    - `Задача не выполнена` + выполненные операции + недостающие операции
+  - В `--output pretty` используется фиксированный порядок этапов:
+    - `Планирование запроса -> Проверка покрытия -> Проверка политик -> Выполнение задачи -> Финальный статус`
+  - В TTY-режиме строки этапов и цепочка workflow перерисовываются в месте:
+    - статусы этапов: `⏳` (в процессе), `✅` (успех), `❌` (ошибка)
+    - строка цепочки: `youtube.download  ->  drive.upload`
+    - цвета цепочки: active=`yellow`, completed=`green`, failed=`red`
+  - Для coverage gap печатается `Реализуйте утилиты: ...`, после чего выполнение останавливается.
+  - Блок `[Summary]` и служебный pretty-блок `[Ошибка] [FAIL] ...` в stdout не выводятся.
   - `LLM_LOG=1` печатает секции request/response по каждому LLM-вызову (с call-id, payload, raw body, extracted content и retry-событиями)
   - Логи LLM появляются только если реально сработал LLM fallback (rule path не сматчился)
 - `make dispatch TEXT='...'` — `request-router (text) -> gap-detector -> workflow-executor`

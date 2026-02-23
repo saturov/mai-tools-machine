@@ -10,59 +10,23 @@ require "yaml"
 require_relative "../skills/request-router/request_router"
 require_relative "../skills/gap-detector/gap_detector"
 require_relative "../skills/workflow-executor/workflow_executor"
+require_relative "logging/agent_status"
 require_relative "llm_client"
 require_relative "policy_engine"
 
 module Agent
   class ValidationError < StandardError; end
 
-  class ProgressReporter
-    FRAMES = %w[| / - \\].freeze
+  STAGE_PLAN = AgentLogging::Status::STAGE_PLAN
+  STAGE_COVERAGE = AgentLogging::Status::STAGE_COVERAGE
+  STAGE_POLICY = AgentLogging::Status::STAGE_POLICY
+  STAGE_EXECUTION = AgentLogging::Status::STAGE_EXECUTION
+  STAGE_FINAL = AgentLogging::Status::STAGE_FINAL
+  STAGE_ORDER = AgentLogging::Status::STAGE_ORDER
 
-    def initialize(enabled:, io: $stderr, interval_seconds: 0.1)
-      @enabled = enabled
-      @io = io
-      @interval_seconds = interval_seconds
-      @label = nil
-      @active = false
-      @thread = nil
-      @frame_idx = 0
-    end
-
-    def start_phase(label)
-      return unless @enabled
-      finish_phase(success: true) if @active
-
-      @label = label.to_s
-      @active = true
-      @frame_idx = 0
-      @thread = Thread.new do
-        while @active
-          frame = FRAMES[@frame_idx % FRAMES.length]
-          @frame_idx += 1
-          @io.print("\r#{frame} #{@label}")
-          @io.flush if @io.respond_to?(:flush)
-          sleep(@interval_seconds)
-        end
-      end
-    end
-
-    def finish_phase(success:)
-      return unless @enabled
-      return unless @active
-
-      @active = false
-      @thread&.join
-      @thread = nil
-      suffix = success ? "готово" : "ошибка"
-      @io.print("\r- #{@label}: #{suffix}\n")
-      @io.flush if @io.respond_to?(:flush)
-    end
-
-    def stop
-      finish_phase(success: false) if @active
-    end
-  end
+  NullRenderer = AgentLogging::Status::NullRenderer
+  PlainRenderer = AgentLogging::Status::PlainRenderer
+  TTYRenderer = AgentLogging::Status::TTYRenderer
 
   module PlanValidator
     module_function
@@ -110,10 +74,6 @@ module Agent
   end
 
   module_function
-
-  GREEN = "\e[32m"
-  RED = "\e[31m"
-  RESET = "\e[0m"
 
   def repo_root
     @repo_root ||= Pathname.new(__dir__).join("..").expand_path
@@ -166,118 +126,8 @@ module Agent
     json << "\n"
     if output_path
       File.write(output_path, json)
-    elsif format == "pretty"
-      print human_report(obj)
-    else
+    elsif format == "json"
       print json
-    end
-  end
-
-  def operation_label(step)
-    return nil unless step.is_a?(Hash)
-    step_id = step["step_id"].to_s.strip
-    capability = step["capability"].to_s.strip
-    return nil if step_id.empty? && capability.empty?
-    return capability if step_id.empty?
-    return step_id if capability.empty?
-
-    "#{step_id} #{capability}"
-  end
-
-  def executed_operation_labels(payload)
-    Array(payload.dig("run", "steps")).map { |step| operation_label(step) }.compact
-  end
-
-  def missing_operation_labels_from_partial(payload)
-    steps = Array(payload.dig("plan", "steps"))
-    missing = steps.select { |step| step.is_a?(Hash) && (step["tool"].nil? || step["tool"].to_s.strip.empty?) }
-    missing.map { |step| operation_label(step) }.compact.uniq
-  end
-
-  def missing_operation_labels_from_execution_failure(payload)
-    Array(payload["missing_operations"]).map { |step| operation_label(step) }.compact
-  end
-
-  def selected_tools_for_report(plan)
-    steps = Array(plan && plan["steps"])
-    seen = {}
-    selected = []
-    steps.each do |step|
-      next unless step.is_a?(Hash)
-      tool = step["tool"].to_s.strip
-      next if tool.empty? || seen[tool]
-      seen[tool] = true
-      selected << {
-        "tool" => tool,
-        "capabilities" => [step["capability"].to_s].reject(&:empty?),
-      }
-    end
-    selected
-  end
-
-  def render_step_lines(success_ops, failed_ops)
-    lines = []
-    success_ops.each { |op| lines << "#{GREEN}✓#{RESET} #{op}" }
-    failed_ops.each { |op| lines << "#{RED}✗#{RESET} #{op}" }
-    lines
-  end
-
-  def render_selected_tools(payload)
-    tools = Array(payload["selected_tools"])
-    return "Отобранные утилиты: нет.\n" if tools.empty?
-
-    rendered = tools.flat_map { |tool| Array(tool["capabilities"]) }.map(&:to_s).reject(&:empty?).uniq
-    return "Отобранные утилиты: нет.\n" if rendered.empty?
-
-    "Отобранные утилиты: #{rendered.join('; ')}.\n"
-  end
-
-  def human_report(payload)
-    status = payload["status"].to_s
-    case status
-    when "executed"
-      executed = executed_operation_labels(payload)
-      lines = render_step_lines(executed, [])
-      body = lines.empty? ? "Выполненные операции: нет.\n" : "Операции:\n#{lines.join("\n")}\n"
-      "Задача успешно выполнена.\n#{body}"
-    when "preview"
-      executed = executed_operation_labels(payload)
-      lines = render_step_lines(executed, [])
-      body = lines.empty? ? "Выполненные операции: нет.\n" : "Операции:\n#{lines.join("\n")}\n"
-      "Задача успешно выполнена.\n#{body}"
-    when "blocked_by_policy"
-      violations = Array(payload.dig("policy_report", "violations"))
-      first_reason = violations.first && violations.first["reason"]
-      reason = first_reason && !first_reason.empty? ? first_reason : "policy_violation"
-      "Ошибка: выполнение заблокировано политикой (#{reason}).\n"
-    when "partial"
-      missing = missing_operation_labels_from_partial(payload)
-      lines = render_step_lines([], missing)
-      body = lines.empty? ? "Операции: нет.\n" : "Операции:\n#{lines.join("\n")}\n"
-      "Задача не выполнена.\n#{body}#{render_selected_tools(payload)}"
-    when "execution_failed"
-      executed = executed_operation_labels(payload)
-      missing = missing_operation_labels_from_execution_failure(payload)
-      lines = render_step_lines(executed, missing)
-      body = lines.empty? ? "Операции: нет.\n" : "Операции:\n#{lines.join("\n")}\n"
-      "Задача не выполнена.\n#{body}#{render_selected_tools(payload)}"
-    when "unroutable"
-      message = payload.dig("error", "message").to_s
-      message = "не удалось построить маршрут" if message.empty?
-      "Ошибка: #{message}\n"
-    when "error"
-      code = payload.dig("error", "code").to_s
-      message = payload.dig("error", "message").to_s
-      details = payload.dig("error", "details")
-      if message.empty? && details.is_a?(Array) && !details.empty?
-        message = details.join("; ")
-      elsif message.empty?
-        message = "неизвестная ошибка"
-      end
-      prefix = code.empty? ? "Ошибка" : "Ошибка (#{code})"
-      "#{prefix}: #{message}\n"
-    else
-      "Статус: #{status.empty? ? 'unknown' : status}.\n"
     end
   end
 
@@ -286,57 +136,197 @@ module Agent
     LLMClient::Client.from_settings(settings, log_io: (llm_log ? $stderr : nil))
   end
 
+  def pretty_renderer(output_format:, io: $stdout)
+    AgentLogging::Status.build_renderer(output_format: output_format, io: io, no_color_env: ENV["NO_COLOR"])
+  end
+
+  def tty_redraw_enabled?(output_format:, io: $stdout)
+    AgentLogging::Status.tty_redraw_enabled?(output_format: output_format, io: io, no_color_env: ENV["NO_COLOR"])
+  end
+
+  def human_coverage_message(missing_caps)
+    caps = Array(missing_caps).map(&:to_s).reject(&:empty?)
+    return "Не хватает реализации нужных capability." if caps.empty?
+    "Недоступны capability: #{caps.join(", ")}."
+  end
+
+  def human_policy_message(policy_reason)
+    reason = policy_reason.to_s.strip
+    reason = "policy_violation" if reason.empty?
+    "Выполнение заблокировано политикой: #{reason}."
+  end
+
+  def human_execution_message(failed_capability, failure)
+    cap = failed_capability.to_s.strip
+    cap = "шаг workflow" if cap.empty?
+    hint = failure["action_hint"].to_s.strip
+    hint = "Проверь входные параметры и доступы." if hint.empty?
+    "Не удалось выполнить #{cap}. #{hint}"
+  end
+
+  def policy_status_fields(policy_result)
+    violations = Array(policy_result["violations"])
+    if policy_result["status"] == "blocked_by_policy"
+      first_reason = violations.first.is_a?(Hash) ? violations.first["reason"].to_s : "policy_violation"
+      {
+        "state" => "FAIL",
+        "payload" => {
+          "verdict" => "deny",
+          "risk" => "high",
+          "reason" => (first_reason.empty? ? "policy_violation" : first_reason),
+          "confirmation_required" => "no",
+        },
+        "summary" => "Выполнение заблокировано политикой",
+      }
+    else
+      {
+        "state" => "OK",
+        "payload" => {
+          "verdict" => "allow",
+          "risk" => "low",
+          "reason" => "policy_passed",
+          "confirmation_required" => "no",
+        },
+        "summary" => "Выполнение разрешено",
+      }
+    end
+  end
+
+  def map_execution_failure(error, capability:, retry_info:)
+    msg = error.message.to_s
+    code = error.respond_to?(:code) ? error.code.to_s : "tool_failed"
+
+    if capability == "drive.upload" && msg.match?(/403|insufficient[_\s-]?permissions/i)
+      return {
+        "root_cause" => "google_drive_api_403_insufficient_permissions",
+        "error_code" => "GDRIVE_403",
+        "action_hint" => "Проверь права на папку и OAuth scope",
+        "retry_info" => retry_info,
+      }
+    end
+
+    if capability == "drive.upload" && msg.match?(/429|quota/i)
+      return {
+        "root_cause" => "quota_exceeded",
+        "error_code" => "GDRIVE_429",
+        "action_hint" => "Освободи место или используй другую папку",
+        "retry_info" => retry_info,
+      }
+    end
+
+    if code == "tool_timeout"
+      return {
+        "root_cause" => "operation_timeout",
+        "error_code" => "TOOL_TIMEOUT",
+        "action_hint" => "Проверь сеть/сервис и увеличь timeout",
+        "retry_info" => retry_info,
+      }
+    end
+
+    root = msg.split("\n").first.to_s.strip
+    root = "tool_execution_failed" if root.empty?
+
+    {
+      "root_cause" => root.gsub(/\s+/, "_").downcase,
+      "error_code" => code.upcase,
+      "action_hint" => "Проверь логи шага и исправь входные параметры/доступы",
+      "retry_info" => retry_info,
+    }
+  end
+
   def run_from_text(text, execute:, dry_run:, output_format:, output_path:, config_path:, policy_path:, provider:, model:, registry_path:, runs_dir:, llm_log: false)
     raise ValidationError, "text must be non-empty" if text.to_s.strip.empty?
 
-    progress = ProgressReporter.new(enabled: output_format == "pretty")
+    request = nil
+    plan = nil
+    policy = nil
+    policy_result = nil
+    llm_client = nil
+    reporter = pretty_renderer(output_format: output_format, io: $stdout)
+    reporter.start(stages: STAGE_ORDER, chain: [])
+    reporter.update_stage(name: STAGE_PLAN, state: "RUNNING")
 
     settings = load_settings(config_path)
     settings["provider"] = provider if provider
     settings["model"] = model if model
 
-    progress.start_phase("Планирование запроса...")
     llm_client = llm_client_from_settings(settings, llm_log: llm_log)
     request, plan = RequestRouter.build_hybrid_plan_from_text(text, llm_client: llm_client, model: settings["model"])
-    progress.finish_phase(success: true)
 
     errors = PlanValidator.validate(plan)
     unless errors.empty?
-      progress.stop
+      reporter.update_stage(name: STAGE_PLAN, state: "FAIL")
+      reporter.emit_final(success: false, message: "План не прошел валидацию. Проверь входные данные запроса.")
       payload = { "status" => "error", "error" => { "code" => "plan_invalid", "details" => errors }, "request" => request, "plan" => plan }
       write_json(payload, format: output_format, output_path: output_path)
       return 1
     end
 
-    progress.start_phase("Проверка покрытия capability...")
-    GapDetector.apply!(plan, registry_path: registry_path)
-    progress.finish_phase(success: true)
+    reporter.update_stage(name: STAGE_PLAN, state: "OK")
 
-    progress.start_phase("Проверка политик...")
-    policy = PolicyEngine.load_policy(policy_path)
-    policy_result = PolicyEngine.check!(plan, policy: policy, registry_path: registry_path, execute: execute && !dry_run)
-    progress.finish_phase(success: true)
-    if policy_result["status"] == "blocked_by_policy"
-      progress.stop
-      payload = { "status" => "blocked_by_policy", "request" => request, "plan" => plan, "policy_report" => policy_result }
-      write_json(payload, format: output_format, output_path: output_path)
-      return (dry_run || !execute) ? 0 : 4
-    end
+    steps = Array(plan["steps"])
+    chain_states = Array.new(steps.length, :pending)
+    reporter.update_chain(steps: steps, step_states: chain_states)
+
+    reporter.update_stage(name: STAGE_COVERAGE, state: "RUNNING")
+    GapDetector.apply!(plan, registry_path: registry_path)
+
+    missing_caps = Array(plan.dig("gap_report")).map { |gap| gap["missing_capability"].to_s }.reject(&:empty?).uniq
 
     if plan["status"] != "complete"
-      progress.stop
+      reporter.update_stage(name: STAGE_COVERAGE, state: "FAIL")
+      reporter.emit_coverage_error(missing_caps: missing_caps)
+      reporter.emit_final(success: false, message: human_coverage_message(missing_caps))
+
       payload = {
         "status" => "partial",
         "request" => request,
         "plan" => plan,
         "policy_report" => policy_result,
-        "selected_tools" => selected_tools_for_report(plan),
+        "selected_tools" => steps.map do |step|
+          next unless step.is_a?(Hash)
+          tool = step["tool"].to_s
+          next if tool.empty?
+          { "tool" => tool, "capabilities" => [step["capability"].to_s].reject(&:empty?) }
+        end.compact.uniq,
       }
       write_json(payload, format: output_format, output_path: output_path)
       return (dry_run || !execute) ? 0 : 2
     end
+    reporter.update_stage(name: STAGE_COVERAGE, state: "OK")
 
-    progress.start_phase(dry_run || !execute ? "Подготовка предпросмотра..." : "Выполнение workflow...")
+    reporter.update_stage(name: STAGE_POLICY, state: "RUNNING")
+    policy = PolicyEngine.load_policy(policy_path)
+    policy_result = PolicyEngine.check!(plan, policy: policy, registry_path: registry_path, execute: execute && !dry_run)
+    pol = policy_status_fields(policy_result)
+    reporter.update_stage(name: STAGE_POLICY, state: pol["state"])
+
+    if policy_result["status"] == "blocked_by_policy"
+      reporter.emit_final(success: false, message: human_policy_message(pol.dig("payload", "reason")))
+      payload = { "status" => "blocked_by_policy", "request" => request, "plan" => plan, "policy_report" => policy_result }
+      write_json(payload, format: output_format, output_path: output_path)
+      return (dry_run || !execute) ? 0 : 4
+    end
+
+    reporter.update_stage(name: STAGE_EXECUTION, state: "RUNNING")
+    workflow_started_at = Time.now
+
+    event_handler = proc do |event|
+      idx = event["step_index"].to_i - 1
+      next if idx.negative? || idx >= chain_states.length
+
+      case event["type"].to_s
+      when "step_attempt_started", "step_retry"
+        chain_states[idx] = :active
+      when "step_succeeded"
+        chain_states[idx] = :done
+      when "step_failed"
+        chain_states[idx] = :failed
+        reporter.update_stage(name: STAGE_EXECUTION, state: "FAIL")
+      end
+      reporter.update_chain(steps: steps, step_states: chain_states)
+    end
+
     run = WorkflowExecutor.run_plan!(
       plan,
       request,
@@ -344,16 +334,31 @@ module Agent
       runs_dir: runs_dir,
       dry_run: dry_run || !execute,
       max_tool_retries: policy["max_tool_retries"].to_i,
-      timeout_seconds: policy["max_run_seconds"].to_i.positive? ? policy["max_run_seconds"].to_i : 300
+      timeout_seconds: policy["max_run_seconds"].to_i.positive? ? policy["max_run_seconds"].to_i : 300,
+      event_handler: event_handler,
+      stream_tool_stderr: !tty_redraw_enabled?(output_format: output_format, io: $stdout)
     )
-    progress.finish_phase(success: true)
+
+    reporter.update_stage(name: STAGE_EXECUTION, state: "OK")
+    reporter.emit_final(success: true)
 
     status = dry_run || !execute ? "preview" : "executed"
-    payload = { "status" => status, "request" => request, "plan" => plan, "policy_report" => policy_result, "run" => run }
+    payload = {
+      "status" => status,
+      "request" => request,
+      "plan" => plan,
+      "policy_report" => policy_result,
+      "run" => run,
+    }
     write_json(payload, format: output_format, output_path: output_path)
     0
   rescue WorkflowExecutor::ExecutionFailed => e
-    progress.finish_phase(success: false)
+    failed_capability = e.respond_to?(:failed_capability) ? e.failed_capability.to_s : "unknown"
+    retry_limit = policy.is_a?(Hash) ? policy["max_tool_retries"].to_i + 1 : 1
+    failure = map_execution_failure(e, capability: failed_capability, retry_info: "#{retry_limit}/#{retry_limit}")
+    reporter.update_stage(name: STAGE_EXECUTION, state: "FAIL")
+    reporter.emit_final(success: false, message: human_execution_message(failed_capability, failure))
+
     missing_operations = Array(e.remaining_steps).map do |step|
       next unless step.is_a?(Hash)
       { "step_id" => step["step_id"], "capability" => step["capability"] }
@@ -368,18 +373,19 @@ module Agent
         "failed_tool_id" => e.failed_tool_id,
       },
       "missing_operations" => missing_operations,
-      "selected_tools" => selected_tools_for_report(plan),
       "error" => { "code" => e.code, "message" => e.message },
     }
     write_json(payload, format: output_format, output_path: output_path)
     1
   rescue RequestRouter::ValidationError => e
-    progress&.stop
     error_code = llm_client.nil? ? "routing_error_no_llm" : "routing_error"
     message = e.message.to_s
     if llm_client.nil?
       message = "#{message} Configure config/agent.yaml api_key or set AGENT_API_KEY/ZAI_API_KEY for free-form planning."
     end
+
+    reporter.update_stage(name: STAGE_PLAN, state: "FAIL")
+    reporter.emit_final(success: false, message: "Не удалось построить маршрут запроса. Уточни формулировку или настрой LLM.")
     payload = {
       "status" => "unroutable",
       "error" => { "code" => error_code, "message" => message },
@@ -388,17 +394,19 @@ module Agent
     write_json(payload, format: output_format, output_path: output_path)
     3
   rescue LLMClient::Error => e
-    progress&.stop
+    reporter.update_stage(name: STAGE_PLAN, state: "FAIL")
+    reporter.emit_final(success: false, message: "Ошибка LLM: проверь конфигурацию и повтори запуск.")
     payload = { "status" => "error", "error" => { "code" => e.code, "message" => e.message } }
     write_json(payload, format: output_format, output_path: output_path)
     1
   rescue ValidationError, PolicyEngine::ValidationError, ToolRegistry::ValidationError, GapDetector::ValidationError, WorkflowExecutor::ValidationError, WorkflowExecutor::ExecutionError => e
-    progress&.stop
-    payload = { "status" => "error", "error" => { "code" => (e.respond_to?(:code) ? e.code : "error"), "message" => e.message } }
+    code = e.respond_to?(:code) ? e.code : "error"
+    reporter.emit_final(success: false, message: "Системная ошибка: #{e.message}")
+    payload = { "status" => "error", "error" => { "code" => code, "message" => e.message } }
     write_json(payload, format: output_format, output_path: output_path)
     1
   ensure
-    progress.stop if defined?(progress) && progress
+    reporter.flush
   end
 
   class CLI

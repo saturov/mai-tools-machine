@@ -2,7 +2,7 @@ RUBY ?= ruby
 
 .DEFAULT_GOAL := help
 
-.PHONY: help validate-manifests registry resolve test-registry route route-text detect-gaps dispatch agent test
+.PHONY: help validate-manifests registry resolve test-registry route route-text detect-gaps dispatch agent test test-logging
 
 help:
 	@echo "Targets:"
@@ -16,6 +16,7 @@ help:
 	@echo "   TEXT='...'       Route + detect-gaps + preview (set EXECUTE=1 to run)"
 	@echo "  make agent TEXT='...'          Autonomous agent entrypoint (use LLM_LOG=1 to print raw LLM request/response sections)"
 	@echo "  make test                      Run all unit tests (registry + skills)"
+	@echo "  make test-logging              Run logging module tests with coverage gate"
 
 validate-manifests:
 	@$(RUBY) scripts/tool_registry.rb validate
@@ -53,11 +54,7 @@ agent:
 	$(RUBY) scripts/agent.rb --text "$(TEXT)" $(if $(PREVIEW),--no-execute --dry-run,) $(if $(LLM_LOG),--llm-log,) --output pretty; \
 	code=$$?; \
 	if [ $$code -eq 2 ]; then \
-		echo "Итог: задача выполнена частично (не хватает capability/утилит)."; \
 		exit 0; \
-	fi; \
-	if [ $$code -ne 0 ]; then \
-		echo "Итог: агент завершился с ошибкой (код=$$code)."; \
 	fi; \
 	exit $$code
 
@@ -70,3 +67,6 @@ test:
 	@$(RUBY) scripts/llm_client_test.rb
 	@$(RUBY) scripts/policy_engine_test.rb
 	@$(RUBY) scripts/agent_test.rb
+
+test-logging:
+	@bundle exec $(RUBY) scripts/logging/logging_suite_test.rb

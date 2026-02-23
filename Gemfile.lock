@@ -1,0 +1,23 @@
+PATH
+  remote: vendor/minitest
+  specs:
+    minitest (5.11.3)
+
+PATH
+  remote: vendor/simplecov
+  specs:
+    simplecov (0.0.1)
+
+GEM
+  remote: https://rubygems.org/
+  specs:
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  minitest!
+  simplecov!
+
+BUNDLED WITH
+   1.17.2

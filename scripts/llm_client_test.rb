@@ -9,6 +9,23 @@ require_relative "llm_client"
 
 class LLMClientTest < Minitest::Test
   FakeResponse = Struct.new(:code, :body)
+  SpyLogger = Struct.new(:events) do
+    def request(call_id:, endpoint:, model:, payload:)
+      events << [:request, call_id, endpoint.to_s, model, payload]
+    end
+
+    def response(call_id:, http_status:, raw_body:)
+      events << [:response, call_id, http_status, raw_body]
+    end
+
+    def content(call_id:, extracted_content:)
+      events << [:content, call_id, extracted_content]
+    end
+
+    def retry(call_id:, next_attempt:, reason:)
+      events << [:retry, call_id, next_attempt, reason]
+    end
+  end
 
   def with_http_start_stub(responses)
     calls = []
@@ -146,6 +163,56 @@ class LLMClientTest < Minitest::Test
       assert_includes prompt, "capability_contract"
       assert_includes prompt, "coverage_confidence"
       assert_includes prompt, "coverage_rationale"
+    end
+  end
+
+  def test_accepts_explicit_logger_and_prefers_it_over_log_io
+    body = {
+      "choices" => [
+        { "message" => { "content" => "{\"steps\":[{\"capability\":\"youtube.download\",\"inputs\":{}}]}" } },
+      ],
+    }
+    responses = [FakeResponse.new("200", JSON.generate(body))]
+    log_io = StringIO.new
+    logger = SpyLogger.new([])
+
+    with_http_start_stub(responses) do |_calls|
+      client = LLMClient::Client.new(
+        provider: "openai_compatible",
+        model: "gpt-test",
+        base_url: "https://example.com/v1",
+        api_key: "secret",
+        log_io: log_io,
+        logger: logger
+      )
+      client.plan_workflow(text: "x", request: { "request_id" => "r1" })
+    end
+
+    assert_equal true, logger.events.any? { |e| e[0] == :request }
+    assert_equal true, logger.events.any? { |e| e[0] == :response }
+    assert_equal true, logger.events.any? { |e| e[0] == :content }
+    assert_equal "", log_io.string
+  end
+
+  def test_works_without_logger_or_log_io
+    body = {
+      "choices" => [
+        { "message" => { "content" => "{\"steps\":[{\"capability\":\"youtube.download\",\"inputs\":{}}]}" } },
+      ],
+    }
+    responses = [FakeResponse.new("200", JSON.generate(body))]
+
+    with_http_start_stub(responses) do |_calls|
+      client = LLMClient::Client.new(
+        provider: "openai_compatible",
+        model: "gpt-test",
+        base_url: "https://example.com/v1",
+        api_key: "secret",
+        log_io: nil,
+        logger: nil
+      )
+      result = client.plan_workflow(text: "x", request: { "request_id" => "r1" })
+      assert_equal "youtube.download", result.dig("steps", 0, "capability")
     end
   end
 end

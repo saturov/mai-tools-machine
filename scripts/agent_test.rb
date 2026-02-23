@@ -3,11 +3,18 @@
 
 require "json"
 require "minitest/autorun"
+require "stringio"
 require "tmpdir"
 
 require_relative "agent"
 
 class AgentTest < Minitest::Test
+  class TTYStringIO < StringIO
+    def tty?
+      true
+    end
+  end
+
   class FakeUnknownPlanner
     def plan_workflow(text:, request:, model: nil)
       {
@@ -103,6 +110,14 @@ class AgentTest < Minitest::Test
   ensure
     singleton.send(:alias_method, :run_plan!, :__orig_run_plan_for_test)
     singleton.send(:remove_method, :__orig_run_plan_for_test)
+  end
+
+  def with_stdout(io)
+    original = $stdout
+    $stdout = io
+    yield
+  ensure
+    $stdout = original
   end
 
   def test_dry_run_preview_for_supported_rule_path
@@ -317,10 +332,14 @@ class AgentTest < Minitest::Test
         assert_equal 0, code
       end
 
-      assert_includes stdout, "Задача успешно выполнена."
-      assert_includes stdout, "✓"
-      assert_includes stdout, "step-1 youtube.download"
-      assert_includes stdout, "step-2 drive.upload"
+      assert_includes stdout, "Планирование запроса ⏳"
+      assert_includes stdout, "Планирование запроса ✅"
+      assert_includes stdout, "Проверка покрытия ✅"
+      assert_includes stdout, "Проверка политик ✅"
+      assert_includes stdout, "Выполнение задачи ✅"
+      assert_includes stdout, "Задача выполнена ✅"
+      assert_includes stdout, "youtube.download"
+      refute_includes stdout, "[Summary]"
       refute_includes stdout, "\"steps\":"
     end
   end
@@ -349,12 +368,12 @@ class AgentTest < Minitest::Test
         assert_equal 2, code
       end
 
-      assert_includes stdout, "Задача не выполнена."
-      assert_includes stdout, "✗"
-      assert_includes stdout, "step-2 yandex.disk.upload"
-      assert_includes stdout, "Отобранные утилиты:"
-      assert_includes stdout, "youtube.download"
-      refute_includes stdout, "youtube-downloader@0.1.0"
+      assert_includes stdout, "Проверка покрытия ❌"
+      assert_includes stdout, "Реализуйте утилиты: yandex.disk.upload"
+      assert_includes stdout, "Задача не выполнена ❌"
+      assert_includes stdout, "Недоступны capability: yandex.disk.upload."
+      refute_includes stdout, "[Ошибка] [FAIL]"
+      refute_includes stdout, "[Summary]"
     end
   end
 
@@ -395,15 +414,272 @@ class AgentTest < Minitest::Test
           assert_equal 1, code
         end
 
-        assert_includes stdout, "Задача не выполнена."
-        assert_includes stdout, "✓"
-        assert_includes stdout, "✗"
-        assert_includes stdout, "step-1 youtube.download"
-        assert_includes stdout, "step-2 drive.upload"
-        assert_includes stdout, "Отобранные утилиты:"
-        assert_includes stdout, "youtube.download"
-        assert_includes stdout, "drive.upload"
+        assert_includes stdout, "Выполнение задачи ❌"
+        assert_includes stdout, "Задача не выполнена ❌"
+        assert_includes stdout, "Не удалось выполнить drive.upload."
+        refute_includes stdout, "[Ошибка] [FAIL]"
+        refute_includes stdout, "[Summary]"
       end
     end
+  end
+
+  def test_pretty_output_shows_retry_progress_for_workflow_step
+    Dir.mktmpdir do |dir|
+      policy_path = File.join(dir, "policy.yaml")
+      File.write(policy_path, <<~YAML)
+        allowed_capabilities: []
+        denied_capabilities: []
+      YAML
+
+      with_workflow_executor_stub(
+        proc do |plan, _request, **opts|
+          handler = opts[:event_handler]
+          handler.call(
+            {
+              "type" => "step_attempt_started",
+              "step_id" => "step-1",
+              "capability" => "youtube.download",
+              "step_index" => 1,
+              "total_steps" => 2,
+              "attempt" => 1,
+              "max_attempts" => 3,
+            }
+          )
+          handler.call(
+            {
+              "type" => "step_retry",
+              "step_id" => "step-1",
+              "capability" => "youtube.download",
+              "step_index" => 1,
+              "total_steps" => 2,
+              "attempt" => 1,
+              "max_attempts" => 3,
+              "error_code" => "tool_failed",
+            }
+          )
+          handler.call(
+            {
+              "type" => "step_attempt_started",
+              "step_id" => "step-1",
+              "capability" => "youtube.download",
+              "step_index" => 1,
+              "total_steps" => 2,
+              "attempt" => 2,
+              "max_attempts" => 3,
+            }
+          )
+          handler.call(
+            {
+              "type" => "step_succeeded",
+              "step_id" => "step-1",
+              "capability" => "youtube.download",
+              "step_index" => 1,
+              "total_steps" => 2,
+              "attempt" => 2,
+              "max_attempts" => 3,
+              "target_quality" => 1080,
+              "actual_quality" => 720,
+              "fallback" => true,
+            }
+          )
+          {
+            "run_id" => "run-test",
+            "status" => "ok",
+            "plan_id" => plan["plan_id"],
+            "request_id" => plan["request_id"],
+            "steps" => [{ "step_id" => "step-1", "status" => "ok" }],
+            "final_outputs" => {},
+          }
+        end
+      ) do
+        stdout, _stderr = capture_io do
+          code = Agent.run_from_text(
+            "Скачай https://www.youtube.com/watch?v=abc и загрузи в https://drive.google.com/drive/folders/folder123",
+            execute: true,
+            dry_run: false,
+            output_format: "pretty",
+            output_path: nil,
+            config_path: File.join(dir, "missing-agent.yaml"),
+            policy_path: policy_path,
+            provider: nil,
+            model: nil,
+            registry_path: registry_path,
+            runs_dir: dir
+          )
+          assert_equal 0, code
+        end
+
+        assert_includes stdout, "Выполнение задачи ⏳"
+        assert_includes stdout, "⏳youtube.download  ->  drive.upload"
+        assert_includes stdout, "✅youtube.download  ->  drive.upload"
+        assert_includes stdout, "Задача выполнена ✅"
+      end
+    end
+  end
+
+  def test_pretty_output_ignores_events_with_invalid_step_index
+    Dir.mktmpdir do |dir|
+      policy_path = File.join(dir, "policy.yaml")
+      File.write(policy_path, <<~YAML)
+        allowed_capabilities: []
+        denied_capabilities: []
+      YAML
+
+      with_workflow_executor_stub(
+        proc do |plan, _request, **opts|
+          handler = opts[:event_handler]
+          handler.call(
+            {
+              "type" => "step_attempt_started",
+              "step_id" => "step-unknown",
+              "capability" => "unknown.capability",
+              "step_index" => 0,
+              "total_steps" => 2,
+              "attempt" => 1,
+              "max_attempts" => 1,
+            }
+          )
+          handler.call(
+            {
+              "type" => "step_failed",
+              "step_id" => "step-unknown",
+              "capability" => "unknown.capability",
+              "step_index" => 99,
+              "total_steps" => 2,
+              "attempt" => 1,
+              "max_attempts" => 1,
+            }
+          )
+          {
+            "run_id" => "run-test",
+            "status" => "ok",
+            "plan_id" => plan["plan_id"],
+            "request_id" => plan["request_id"],
+            "steps" => [],
+            "final_outputs" => {},
+          }
+        end
+      ) do
+        stdout, _stderr = capture_io do
+          code = Agent.run_from_text(
+            "Скачай https://www.youtube.com/watch?v=abc и загрузи в https://drive.google.com/drive/folders/folder123",
+            execute: true,
+            dry_run: false,
+            output_format: "pretty",
+            output_path: nil,
+            config_path: File.join(dir, "missing-agent.yaml"),
+            policy_path: policy_path,
+            provider: nil,
+            model: nil,
+            registry_path: registry_path,
+            runs_dir: dir
+          )
+          assert_equal 0, code
+        end
+
+        assert_includes stdout, "Задача выполнена ✅"
+      end
+    end
+  end
+
+  def test_tty_renderer_chain_colors_follow_contract
+    io = TTYStringIO.new
+    renderer = Agent::TTYRenderer.new(io: io, colorize: true)
+    steps = [{ "capability" => "youtube.download" }, { "capability" => "drive.upload" }]
+
+    renderer.start(stages: Agent::STAGE_ORDER, chain: steps)
+    renderer.update_chain(steps: steps, step_states: [:active, :pending])
+    renderer.update_chain(steps: steps, step_states: [:done, :failed])
+
+    output = io.string
+    assert_includes output, "\e[33myoutube.download\e[0m"
+    assert_includes output, "\e[32myoutube.download\e[0m"
+    assert_includes output, "\e[31mdrive.upload\e[0m"
+  end
+
+  def test_tty_renderer_hides_final_status_until_emit_final
+    io = TTYStringIO.new
+    renderer = Agent::TTYRenderer.new(io: io, colorize: true)
+    steps = [{ "capability" => "youtube.download" }, { "capability" => "drive.upload" }]
+
+    renderer.start(stages: Agent::STAGE_ORDER, chain: steps)
+    renderer.update_stage(name: Agent::STAGE_PLAN, state: "OK")
+    renderer.update_stage(name: Agent::STAGE_COVERAGE, state: "OK")
+    renderer.update_stage(name: Agent::STAGE_POLICY, state: "OK")
+    renderer.update_stage(name: Agent::STAGE_EXECUTION, state: "RUNNING")
+    before_final = io.string
+    refute_includes before_final, "Финальный статус"
+    refute_includes before_final, "Задача выполнена ✅"
+    refute_includes before_final, "Задача не выполнена ❌"
+
+    renderer.emit_final(success: true)
+    after_final = io.string
+    refute_includes after_final, "Финальный статус ⏳"
+    assert_includes after_final, "Задача выполнена ✅"
+  end
+
+  def test_pretty_non_tty_fallback_avoids_ansi_sequences
+    Dir.mktmpdir do |dir|
+      stdout, _stderr = capture_io do
+        code = Agent.run_from_text(
+          "Скачай https://www.youtube.com/watch?v=abc и загрузи в https://drive.google.com/drive/folders/folder123",
+          execute: false,
+          dry_run: true,
+          output_format: "pretty",
+          output_path: nil,
+          config_path: File.join(dir, "missing-agent.yaml"),
+          policy_path: File.join(dir, "missing-policy.yaml"),
+          provider: nil,
+          model: nil,
+          registry_path: registry_path,
+          runs_dir: dir
+        )
+        assert_equal 0, code
+      end
+
+      refute_match(/\e\[[0-9;]*[A-Za-z]/, stdout)
+      assert_includes stdout, "Планирование запроса ⏳"
+    end
+  end
+
+  def test_tty_pretty_disables_tool_stderr_streaming
+    captured = nil
+    old_no_color = ENV["NO_COLOR"]
+    ENV.delete("NO_COLOR")
+    with_workflow_executor_stub(
+      proc do |plan, _request, **opts|
+        captured = opts[:stream_tool_stderr]
+        {
+          "run_id" => "run-test",
+          "status" => "dry-run",
+          "plan_id" => plan["plan_id"],
+          "request_id" => plan["request_id"],
+          "steps" => [],
+          "final_outputs" => {},
+        }
+      end
+    ) do
+      Dir.mktmpdir do |dir|
+        with_stdout(TTYStringIO.new) do
+          code = Agent.run_from_text(
+            "Скачай https://www.youtube.com/watch?v=abc и загрузи в https://drive.google.com/drive/folders/folder123",
+            execute: false,
+            dry_run: true,
+            output_format: "pretty",
+            output_path: nil,
+            config_path: File.join(dir, "missing-agent.yaml"),
+            policy_path: File.join(dir, "missing-policy.yaml"),
+            provider: nil,
+            model: nil,
+            registry_path: registry_path,
+            runs_dir: dir
+          )
+          assert_equal 0, code
+        end
+      end
+    end
+    assert_equal false, captured
+  ensure
+    ENV["NO_COLOR"] = old_no_color
   end
 end
